@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 
 import { detectConfigFile, parseJsonc } from "../shared/jsonc-parser";
 import { migrateLegacyAgentEnabledInMemory } from "./agent-disable";
@@ -36,6 +36,28 @@ function getUserConfigBasePath(): string {
 
 function getProjectConfigBasePath(directory: string): string {
     return join(directory, ".opencode", CONFIG_FILE_BASENAME);
+}
+
+/**
+ * When opencode runs INSIDE the user config directory (e.g. the user opens
+ * `~/.config/opencode` itself to edit their setup), project-config discovery
+ * resolves to the very same magic-context.jsonc as the trusted user config.
+ * Loading it a second time as an "untrusted repo config" double-applies the
+ * file and falsely triggers the project security strips ({file:} tokens,
+ * memory.external) against the user's own config. Treat same-file as
+ * user-config-only.
+ */
+function dropProjectConfigWhenSameAsUser(
+    userDetected: ReturnType<typeof detectConfigFile>,
+    projectDetected: ReturnType<typeof detectConfigFile>,
+): ReturnType<typeof detectConfigFile> {
+    if (userDetected.format === "none" || projectDetected.format === "none") {
+        return projectDetected;
+    }
+    if (resolve(userDetected.path) === resolve(projectDetected.path)) {
+        return { format: "none", path: projectDetected.path };
+    }
+    return projectDetected;
 }
 
 interface LoadedConfigFile {
@@ -373,7 +395,8 @@ export function loadPluginConfig(
     // Check project root first, then .opencode/ — root takes precedence
     const rootDetected = detectConfigFile(join(directory, CONFIG_FILE_BASENAME));
     const dotOpenCodeDetected = detectConfigFile(getProjectConfigBasePath(directory));
-    const projectDetected = rootDetected.format !== "none" ? rootDetected : dotOpenCodeDetected;
+    let projectDetected = rootDetected.format !== "none" ? rootDetected : dotOpenCodeDetected;
+    projectDetected = dropProjectConfigWhenSameAsUser(userDetected, projectDetected);
 
     const userLoaded = userDetected.format === "none" ? null : loadConfigFile(userDetected.path);
     const projectLoaded =
@@ -498,7 +521,8 @@ export function loadPluginConfigDetailed(directory: string): LoadResultDetailed 
     const userDetected = detectConfigFile(getUserConfigBasePath());
     const rootDetected = detectConfigFile(join(directory, CONFIG_FILE_BASENAME));
     const dotOpenCodeDetected = detectConfigFile(getProjectConfigBasePath(directory));
-    const projectDetected = rootDetected.format !== "none" ? rootDetected : dotOpenCodeDetected;
+    let projectDetected = rootDetected.format !== "none" ? rootDetected : dotOpenCodeDetected;
+    projectDetected = dropProjectConfigWhenSameAsUser(userDetected, projectDetected);
 
     const userLoaded =
         userDetected.format === "none" ? null : loadConfigFileDetailed(userDetected.path, "user");

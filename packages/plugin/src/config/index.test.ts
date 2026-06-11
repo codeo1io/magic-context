@@ -604,3 +604,52 @@ describe("loadPluginConfig — raw merge preserves user fields not set in projec
         expect(result.disabled_hooks?.sort()).toEqual(["a", "b", "c"]);
     });
 });
+
+describe("loadPluginConfig — running inside the user config directory", () => {
+    it("does not treat the user config as an untrusted project config (same file)", () => {
+        // Scope directory === user config dir → project discovery finds the
+        // SAME magic-context.jsonc as the user config. It must load once, as
+        // trusted user config: {file:} stays expanded, memory.external kept.
+        const xdg = mkdtempSync(join(tmpdir(), "mc-config-test-"));
+        const configDir = join(xdg, "opencode");
+        const fs = require("node:fs") as typeof import("node:fs");
+        fs.mkdirSync(configDir, { recursive: true });
+        const secretPath = join(xdg, "secret.txt");
+        writeFileSync(secretPath, "s3cret-token", "utf-8");
+        writeFileSync(
+            join(configDir, "magic-context.jsonc"),
+            JSON.stringify({
+                memory: {
+                    external: {
+                        provider: "hindsight",
+                        endpoint: "http://127.0.0.1:8889",
+                        main_bank: "main",
+                        api_key: `{file:${secretPath}}`,
+                    },
+                },
+            }),
+            "utf-8",
+        );
+
+        const origXdg = process.env.XDG_CONFIG_HOME;
+        process.env.XDG_CONFIG_HOME = xdg;
+        try {
+            // opencode opened ON the config dir itself.
+            const config = loadPluginConfig(configDir);
+            const warnings = config.configWarnings ?? [];
+            expect(warnings.filter((w) => w.includes("[project config]"))).toEqual([]);
+            const memory = config.memory as Record<string, unknown> | undefined;
+            const external = memory?.external as Record<string, unknown> | undefined;
+            expect(external?.provider).toBe("hindsight");
+            expect(external?.api_key).toBe("s3cret-token");
+        } finally {
+            if (origXdg === undefined) delete process.env.XDG_CONFIG_HOME;
+            else process.env.XDG_CONFIG_HOME = origXdg;
+            try {
+                rmSync(xdg, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+            } catch {
+                /* Ignore EBUSY on Windows */
+            }
+        }
+    });
+});
