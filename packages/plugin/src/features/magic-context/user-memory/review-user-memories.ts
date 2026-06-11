@@ -8,6 +8,8 @@ import { log } from "../../../shared/logger";
 import type { Database } from "../../../shared/sqlite";
 import { renewLease } from "../dreamer/lease";
 import { DREAMER_SYSTEM_PROMPT } from "../dreamer/task-prompts";
+import { removeFromExternalBackend, teeToExternalBackend } from "../memory/external-memory";
+import type { ExternalMemoryRemoveItem } from "../memory/external-memory-provider";
 import { bumpProjectUserProfileVersion } from "../storage";
 import { recordChildInvocation } from "../subagent-token-capture";
 import {
@@ -236,14 +238,26 @@ If no promotions are warranted, return empty arrays. Always consume reviewed can
                 candidateIds: p.candidate_ids ?? [],
             }))
             .filter((p) => p.content.length > 0);
+        // Coerce LLM-provided ids to integers: a stringified id ("5") would
+        // pass a truthiness check but miss both the number-keyed snapshot Map
+        // (silently skipping the external corrective remove — resurrecting
+        // dismissed memories next session) and any strict-typed DB binding.
         const updates = (parsed.update_existing ?? [])
             .map((u) => ({
-                memoryId: u.memory_id,
+                memoryId: Number(u.memory_id),
                 content: u.content?.trim() ?? "",
             }))
-            .filter((u) => Boolean(u.memoryId) && u.content.length > 0);
-        const dismissals = (parsed.dismiss_existing ?? []).filter((d) => Boolean(d.memory_id));
+            .filter((u) => Number.isInteger(u.memoryId) && u.memoryId > 0 && u.content.length > 0);
+        const dismissals = (parsed.dismiss_existing ?? [])
+            .map((d) => ({ ...d, memory_id: Number(d.memory_id) }))
+            .filter((d) => Number.isInteger(d.memory_id) && d.memory_id > 0);
         const consumeCandidateIds = parsed.consume_candidate_ids ?? [];
+
+        // Snapshot of pre-mutation content for every stable memory touched by
+        // this pass — needed to compute the corrective remove items for the
+        // external store AFTER the transaction (the new content is already
+        // persisted at that point).
+        const stableContentById = new Map(stableMemories.map((m) => [m.id, m.content]));
 
         args.db.transaction(() => {
             for (const promotion of promotions) {
@@ -271,6 +285,59 @@ If no promotions are warranted, return empty arrays. Always consume reviewed can
         result.merged = updates.length;
         result.dismissed = dismissals.length;
         result.candidatesConsumed = consumeCandidateIds.length;
+
+        // Corrective propagation (W2): dismissed/updated stable user memories
+        // must leave the external store too, or the profile recall slice will
+        // resurrect them next session. Updates also re-tee the new content so
+        // the fresh text lands in the main bank immediately (the next recall
+        // would otherwise still surface the stale content via hash mismatch).
+        const removedItems: ExternalMemoryRemoveItem[] = [];
+        for (const dismissal of dismissals) {
+            const oldContent = stableContentById.get(dismissal.memory_id);
+            if (oldContent) {
+                removedItems.push({
+                    content: oldContent,
+                    category: "USER_PROFILE",
+                    scope: "user",
+                });
+            }
+        }
+        for (const update of updates) {
+            const oldContent = stableContentById.get(update.memoryId);
+            if (oldContent && oldContent !== update.content) {
+                removedItems.push({
+                    content: oldContent,
+                    category: "USER_PROFILE",
+                    scope: "user",
+                });
+            }
+        }
+        if (removedItems.length > 0) {
+            void removeFromExternalBackend(removedItems);
+        }
+        if (updates.length > 0) {
+            void teeToExternalBackend(
+                "dreamer",
+                updates.map((update) => ({
+                    content: update.content,
+                    category: "USER_PROFILE" as const,
+                    scope: "user" as const,
+                    sourceType: "dreamer" as const,
+                })),
+            );
+        }
+
+        if (promotions.length > 0) {
+            void teeToExternalBackend(
+                "dreamer",
+                promotions.map((promotion) => ({
+                    content: promotion.content,
+                    category: "USER_PROFILE" as const,
+                    scope: "user" as const,
+                    sourceType: "dreamer" as const,
+                })),
+            );
+        }
 
         for (const promotion of promotions) {
             log(`[dreamer] user-memories: promoted "${promotion.content.slice(0, 60)}..."`);

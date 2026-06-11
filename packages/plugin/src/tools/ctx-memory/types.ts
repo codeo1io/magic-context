@@ -10,7 +10,11 @@ import type { Database } from "../../shared/sqlite";
 // since active memories are already in context) stays dreamer-only.
 export const CTX_MEMORY_ACTIONS = ["write", "archive", "update", "merge"] as const;
 
-export const CTX_MEMORY_DREAMER_ACTIONS = [...CTX_MEMORY_ACTIONS, "list"] as const;
+// `verify` stays dreamer-only: it asserts repo-grounded truth (the dreamer
+// greps the actual code before verifying) and refreshes external long-term
+// recency — a primary agent confirming its own memory mid-session would be
+// circular evidence.
+export const CTX_MEMORY_DREAMER_ACTIONS = [...CTX_MEMORY_ACTIONS, "list", "verify"] as const;
 
 export type CtxMemoryAction = (typeof CTX_MEMORY_DREAMER_ACTIONS)[number];
 
@@ -26,6 +30,10 @@ export interface CtxMemoryArgs {
     ids?: number[];
     limit?: number;
     reason?: string;
+    /** Write-only. "project" (default) = local store + external tee.
+     *  "global" = cross-project fact stored ONLY in the external long-term
+     *  backend's main bank (requires memory.external configured). */
+    scope?: "project" | "global";
 }
 
 export interface CtxMemoryToolDeps {
