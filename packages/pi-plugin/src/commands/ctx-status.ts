@@ -90,7 +90,7 @@ export function registerCtxStatusCommand(
 				const modelKey = ctx.model
 					? `${ctx.model.provider}/${ctx.model.id}`
 					: undefined;
-				const statusText = executeStatus(
+				const statusText = await executeStatus(
 					currentDeps.db,
 					sessionId,
 					currentDeps.protectedTags ?? 20,

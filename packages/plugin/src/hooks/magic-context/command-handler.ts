@@ -518,7 +518,7 @@ export function createMagicContextCommandHandler(deps: {
                 }
                 const liveModelKey = deps.getLiveModelKey?.(sessionId);
                 const liveContextLimit = deps.getContextLimit?.(sessionId);
-                const statusOutput = executeStatus(
+                const statusOutput = await executeStatus(
                     deps.db,
                     sessionId,
                     deps.protectedTags,

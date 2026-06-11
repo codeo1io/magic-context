@@ -3,6 +3,11 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { replaceAllCompartmentState } from "../features/magic-context/compartment-storage";
 import { insertMemory } from "../features/magic-context/memory";
+import {
+    _resetExternalMemoryForTests,
+    _setTestExternalBackendFactory,
+    initializeExternalMemory,
+} from "../features/magic-context/memory/external-memory";
 import { resolveProjectIdentity } from "../features/magic-context/memory/project-identity";
 import { runMigrations } from "../features/magic-context/migrations";
 import { initializeDatabase } from "../features/magic-context/storage-db";
@@ -24,6 +29,7 @@ function createTestDb(): Database {
 afterEach(() => {
     resetSidebarSnapshotCache();
     clearModelsDevCache();
+    _resetExternalMemoryForTests();
 });
 
 describe("buildSidebarSnapshot — memory tokens fallback (bug #1)", () => {
@@ -184,7 +190,7 @@ describe("buildSidebarSnapshot — context limit", () => {
 });
 
 describe("buildStatusDetail — history token reuse (council audit bg_51106601 #1)", () => {
-    test("sets historyBlockTokens from compartmentTokens only (facts retired in v2)", () => {
+    test("sets historyBlockTokens from compartmentTokens only (facts retired in v2)", async () => {
         const db = createTestDb();
         try {
             const sessionId = "ses-status-history-tokens";
@@ -225,7 +231,7 @@ describe("buildStatusDetail — history token reuse (council audit bg_51106601 #
                 ],
             );
 
-            const detail = buildStatusDetail(db, sessionId, directory);
+            const detail = await buildStatusDetail(db, sessionId, directory);
 
             // v2: facts are retired as a render source (promoted to memories), so
             // factTokens is 0 and the history block is compartments only — facts
@@ -233,6 +239,108 @@ describe("buildStatusDetail — history token reuse (council audit bg_51106601 #
             expect(detail.compartmentTokens).toBeGreaterThan(0);
             expect(detail.factTokens).toBe(0);
             expect(detail.historyBlockTokens).toBe(detail.compartmentTokens);
+        } finally {
+            closeQuietly(db);
+        }
+    });
+});
+
+describe("buildStatusDetail — external memory section", () => {
+    test("provider off → externalMemory is null", async () => {
+        const db = createTestDb();
+        try {
+            const sessionId = "ses-status-ext-off";
+            db.prepare(
+                "INSERT INTO session_meta (session_id, last_input_tokens, last_context_percentage) VALUES (?, 0, 0)",
+            ).run(sessionId);
+            initializeExternalMemory({ provider: "off" });
+            const detail = await buildStatusDetail(db, sessionId, process.cwd());
+            expect(detail.externalMemory).toBeNull();
+        } finally {
+            closeQuietly(db);
+        }
+    });
+
+    test("provider on, fake backend exposes fetchFailedRetainCount → detail surfaces the count", async () => {
+        const db = createTestDb();
+        try {
+            const sessionId = "ses-status-ext-on";
+            db.prepare(
+                "INSERT INTO session_meta (session_id, last_input_tokens, last_context_percentage) VALUES (?, 0, 0)",
+            ).run(sessionId);
+            _setTestExternalBackendFactory(() => ({
+                backendId: "fake:ext-status",
+                initialize: async () => true,
+                retain: async () => 0,
+                dispose: async () => {},
+                _getCircuitState: () => "closed",
+                fetchFailedRetainCount: async () => 3,
+            }));
+            initializeExternalMemory({
+                provider: "hindsight",
+                endpoint: "http://10.0.0.1:8889",
+                project_bank: "mc-{name}-{id8}",
+                main_bank: "main-memory",
+                retain_sources: ["historian", "agent", "dreamer"],
+                tags: ["user:test"],
+                recall: {
+                    enabled: true,
+                    timeout_ms: 3000,
+                    max_tokens: 2048,
+                    dedup_threshold: 0.85,
+                    global_tags: ["user:test"],
+                    global_from_prompt: false,
+                    search: true,
+                    mental_models: true,
+                    profile_mental_models: ["user-preferences"],
+                },
+            });
+            const detail = await buildStatusDetail(db, sessionId, process.cwd());
+            expect(detail.externalMemory).not.toBeNull();
+            expect(detail.externalMemory?.provider).toBe("hindsight");
+            expect(detail.externalMemory?.endpoint).toBe("http://10.0.0.1:8889");
+            expect(detail.externalMemory?.circuitState).toBe("closed");
+            expect(detail.externalMemory?.failedRetainCount).toBe(3);
+        } finally {
+            closeQuietly(db);
+        }
+    });
+
+    test("provider on, backend has no fetchFailedRetainCount hook → failedRetainCount null", async () => {
+        const db = createTestDb();
+        try {
+            const sessionId = "ses-status-ext-noop";
+            db.prepare(
+                "INSERT INTO session_meta (session_id, last_input_tokens, last_context_percentage) VALUES (?, 0, 0)",
+            ).run(sessionId);
+            _setTestExternalBackendFactory(() => ({
+                backendId: "fake:ext-noop",
+                initialize: async () => true,
+                retain: async () => 0,
+                dispose: async () => {},
+            }));
+            initializeExternalMemory({
+                provider: "hindsight",
+                endpoint: "http://10.0.0.1:8889",
+                project_bank: "mc-{name}-{id8}",
+                main_bank: "main-memory",
+                retain_sources: ["historian", "agent", "dreamer"],
+                tags: ["user:test"],
+                recall: {
+                    enabled: true,
+                    timeout_ms: 3000,
+                    max_tokens: 2048,
+                    dedup_threshold: 0.85,
+                    global_tags: ["user:test"],
+                    global_from_prompt: false,
+                    search: true,
+                    mental_models: true,
+                    profile_mental_models: ["user-preferences"],
+                },
+            });
+            const detail = await buildStatusDetail(db, sessionId, process.cwd());
+            expect(detail.externalMemory).not.toBeNull();
+            expect(detail.externalMemory?.failedRetainCount).toBeNull();
         } finally {
             closeQuietly(db);
         }
