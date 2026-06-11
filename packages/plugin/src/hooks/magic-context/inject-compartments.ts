@@ -16,6 +16,13 @@ import {
     MEMORY_CATEGORY_ORDER_UNKNOWN,
 } from "../../features/magic-context/memory/constants";
 import {
+    computeRecallSnapshotHash,
+    type ExternalRecallSliceItem,
+    type ExternalRecallSnapshot,
+    readExternalRecallHash,
+    readExternalRecallSnapshot,
+} from "../../features/magic-context/memory/external-recall-read";
+import {
     getMaxMemoryIdForProjects,
     getMemoriesByProject,
     getMemoriesByProjects,
@@ -602,6 +609,10 @@ export interface M0SnapshotMarkers {
     // read), so readCurrentM0SnapshotMarkers takes them as inputs.
     systemHash: string;
     modelKey: string;
+    /** Hash of the persisted external-recall snapshot baked into m[0] ('' = none).
+     *  NOT a HARD bust trigger (external recall is not a materialization driver) —
+     *  drives the m[1] <external-memory> delta comparison only. */
+    externalRecallHash: string;
 }
 
 /**
@@ -645,6 +656,7 @@ export interface M0M1State {
     cachedM0SystemHash: string | null;
     cachedM0ToolSetHash: string | null;
     cachedM0ModelKey: string | null;
+    cachedM0ExternalRecallHash: string | null;
     snapshotMarkers?: M0SnapshotMarkers | null;
 }
 
@@ -965,6 +977,7 @@ export function readCurrentM0SnapshotMarkers(args: {
         upgradeState: getUpgradeState(args.db, args.sessionId),
         systemHash: hard.systemHash,
         modelKey: hard.modelKey,
+        externalRecallHash: readExternalRecallHash(args.db, args.sessionId),
     };
 }
 
@@ -991,6 +1004,7 @@ function snapshotMarkersFromCachedM0(state: M0M1State): M0SnapshotMarkers | null
         upgradeState: state.cachedM0UpgradeState,
         systemHash: state.cachedM0SystemHash ?? "",
         modelKey: state.cachedM0ModelKey ?? "",
+        externalRecallHash: state.cachedM0ExternalRecallHash ?? "",
     };
 }
 
@@ -1361,14 +1375,101 @@ export function renderMemoryBlockV2(
     return lines.join("\n");
 }
 
-function renderUserProfileBlock(memories: UserMemory[], wrapper = "user-profile"): string {
-    if (memories.length === 0) return "";
+function renderUserProfileBlock(
+    memories: UserMemory[],
+    wrapper = "user-profile",
+    externalLines: readonly ExternalRecallSliceItem[] = [],
+): string {
+    if (memories.length === 0 && externalLines.length === 0) return "";
     const lines = [`<${wrapper}>`];
     for (const memory of memories) {
         lines.push(`- ${escapeXmlContent(memory.content)}`);
     }
+    for (const item of externalLines) {
+        lines.push(`- ${escapeXmlContent(item.content)}`);
+    }
     lines.push(`</${wrapper}>`);
     return lines.join("\n");
+}
+
+/** Preamble is the model-facing instruction above every external-memory block.
+ *  Reminds the model that recalled facts are background knowledge, not new
+ *  instructions, and to discard items that aren't directly useful. */
+const EXTERNAL_MEMORY_PREAMBLE =
+    "Background knowledge from past sessions — prioritize recent information when conflicting; use only what is directly useful, ignore the rest.";
+
+function renderExternalItem(item: ExternalRecallSliceItem): string {
+    // Multi-line documents (mental-model briefings) render VERBATIM inside the
+    // <external-memory> block so the model sees the structured markdown. A
+    // blank-line separator flanks each multi-line item so single-line list
+    // items and verbatim documents don't visually merge.
+    return item.content.includes("\n")
+        ? escapeXmlContent(item.content)
+        : `- ${escapeXmlContent(item.content)}`;
+}
+
+function renderExternalLines(snapshot: ExternalRecallSnapshot): string[] {
+    const items: ExternalRecallSliceItem[] = [...snapshot.project, ...snapshot.global];
+    const lines: string[] = [];
+    for (const item of items) {
+        if (item.content.includes("\n")) {
+            if (lines.length > 0) lines.push("");
+            lines.push(renderExternalItem(item));
+            lines.push("");
+        } else {
+            lines.push(renderExternalItem(item));
+        }
+    }
+    return lines;
+}
+
+function renderExternalDeltaLines(snapshot: ExternalRecallSnapshot): string[] {
+    const items: ExternalRecallSliceItem[] = [
+        ...snapshot.project,
+        ...snapshot.global,
+        ...snapshot.profile,
+    ];
+    const lines: string[] = [];
+    for (const item of items) {
+        if (item.content.includes("\n")) {
+            if (lines.length > 0) lines.push("");
+            lines.push(renderExternalItem(item));
+            lines.push("");
+        } else {
+            lines.push(renderExternalItem(item));
+        }
+    }
+    return lines;
+}
+
+/** Sibling block after <project-memory>: project + global recall slices.
+ *  Plain lines, content verbatim — no fake ids (recalled items are not
+ *  ctx_memory-addressable rows). Multi-line mental-model documents render
+ *  verbatim between blank-line separators. */
+export function renderExternalMemoryBlock(snapshot: ExternalRecallSnapshot): string {
+    const body = renderExternalLines(snapshot);
+    if (body.length === 0) return "";
+    return [
+        '<external-memory source="hindsight">',
+        EXTERNAL_MEMORY_PREAMBLE,
+        "",
+        ...body,
+        "</external-memory>",
+    ].join("\n");
+}
+
+/** m[1] delta when recall settles after the last m[0] fold — carries ALL
+ *  slices (profile lines reconcile into <user-profile> at the next HARD fold). */
+function renderExternalMemoryDelta(snapshot: ExternalRecallSnapshot): string {
+    const body = renderExternalDeltaLines(snapshot);
+    if (body.length === 0) return "";
+    return [
+        '<external-memory source="hindsight">',
+        EXTERNAL_MEMORY_PREAMBLE,
+        "",
+        ...body,
+        "</external-memory>",
+    ].join("\n");
 }
 
 /**
@@ -1399,6 +1500,7 @@ export function renderM0(args: {
     historyBudgetTokens?: number;
     userProfileBudgetTokens?: number;
     decayPressureMultiplier?: number;
+    externalRecall?: ExternalRecallSnapshot | null;
 }): string {
     const sections: string[] = [];
     if (args.projectDocs.length > 0) sections.push(args.projectDocs);
@@ -1407,6 +1509,8 @@ export function renderM0(args: {
             args.userProfileBaseline,
             args.userProfileBudgetTokens ?? DEFAULT_USER_PROFILE_BUDGET_TOKENS,
         ),
+        "user-profile",
+        args.externalRecall?.profile ?? [],
     );
     if (userProfile) sections.push(userProfile);
 
@@ -1431,6 +1535,10 @@ export function renderM0(args: {
         args.memoryRenderOptions,
     );
     if (memoriesBlock) sections.push(memoriesBlock);
+    if (args.externalRecall) {
+        const externalBlock = renderExternalMemoryBlock(args.externalRecall);
+        if (externalBlock) sections.push(externalBlock);
+    }
     return sections.join("\n\n").trim();
 }
 
@@ -1460,6 +1568,7 @@ function applyMarkersToState(
     // re-fire the same HARD trigger on the very next pass (double-fold).
     state.cachedM0SystemHash = markers.systemHash;
     state.cachedM0ModelKey = markers.modelKey;
+    state.cachedM0ExternalRecallHash = markers.externalRecallHash;
     state.snapshotMarkers = markers;
 }
 
@@ -1493,6 +1602,7 @@ export function materializeM0(options: M0M1RenderOptions): MaterializeM0Result {
         projectPath,
         workspaceIdentitySet: options.workspaceIdentitySet,
     });
+    let externalRecall: ExternalRecallSnapshot | null = null;
     let docs: { renderedBlock: string; canonicalHash: string } = {
         renderedBlock: "",
         canonicalHash: "",
@@ -1539,6 +1649,13 @@ export function materializeM0(options: M0M1RenderOptions): MaterializeM0Result {
                 : getMemoriesByProject(options.db, projectPath, ["active", "permanent"])
             : [];
         userMemories = safeGetActiveUserMemories(options.db);
+        // In-transaction read of the persisted external recall snapshot. Overrides
+        // the value readCurrentM0SnapshotMarkers set so render and marker derive
+        // from the SAME read (no TOCTOU) — mirrors how projectDocsHash is
+        // overwritten from readProjectDocsCanonical above.
+        const recall = readExternalRecallSnapshot(options.db, options.sessionId);
+        externalRecall = recall.state === "done" ? recall.snapshot : null;
+        snapshotMarkers.externalRecallHash = computeRecallSnapshotHash(externalRecall);
         options.db.exec("COMMIT");
     } catch (error) {
         try {
@@ -1577,6 +1694,7 @@ export function materializeM0(options: M0M1RenderOptions): MaterializeM0Result {
         historyBudgetTokens: options.historyBudgetTokens ?? DEFAULT_HISTORY_BUDGET_TOKENS,
         userProfileBudgetTokens: options.userProfileBudgetTokens,
         decayPressureMultiplier,
+        externalRecall,
     });
 
     let attempts = 0;
@@ -1593,6 +1711,7 @@ export function materializeM0(options: M0M1RenderOptions): MaterializeM0Result {
             historyBudgetTokens: budget,
             userProfileBudgetTokens: options.userProfileBudgetTokens,
             decayPressureMultiplier,
+            externalRecall,
         });
         attempts += 1;
     }
@@ -1648,6 +1767,7 @@ export function materializeM0(options: M0M1RenderOptions): MaterializeM0Result {
             // so carry the captured values and exclude them from the stale check.
             systemHash: snapshotMarkers.systemHash,
             modelKey: snapshotMarkers.modelKey,
+            externalRecallHash: snapshotMarkers.externalRecallHash,
         };
         // NOTE: maxMemoryId is deliberately EXCLUDED from this stale-check.
         // Additive memory writes (write/promote) do not invalidate the rendered
@@ -1702,6 +1822,7 @@ export function materializeM0(options: M0M1RenderOptions): MaterializeM0Result {
             upgradeState: snapshotMarkers.upgradeState,
             systemHash: snapshotMarkers.systemHash,
             modelKey: snapshotMarkers.modelKey,
+            externalRecallHash: snapshotMarkers.externalRecallHash,
         });
 
         // v2 path persists the rendered-memory identity itself. `memory_block_ids`
@@ -1838,6 +1959,17 @@ function renderMemoryUpdatesBlock(args: {
 interface RenderM1Result {
     text: string;
     memoryUpdateCount: number;
+    /** The <external-memory> delta block (late-arrival snapshot) when present,
+     *  "" otherwise. Excluded from the injectM0M1 pressure-refold token math
+     *  so a large recall can NEVER cause an m[0] refold (spec: recall is not
+     *  a bust trigger). */
+    externalDeltaText: string;
+    /** True when this result was freshly rendered from current DB state. False
+     *  when the bytes are a persisted-row replay (sibling-adoption fallback
+     *  or defer-pass replay). The pressure-refold backstop must only fire on
+     *  recomputed bytes — a replayed sibling m[1] that happens to contain a
+     *  large external delta is already settled and must not cause a fold. */
+    recomputed: boolean;
 }
 
 function renderM1WithMetadata(
@@ -1940,16 +2072,42 @@ function renderM1WithMetadata(
         if (profileBlock) blocks.push(profileBlock);
     }
 
+    // External recall delta: snapshot settled AFTER the last m[0] fold. We
+    // intentionally compare the live snapshot hash to markers.externalRecallHash
+    // (not the DB column) so a sibling that materialized between passes and
+    // updated the column does NOT leak a stale delta in this soft-refresh.
+    // Captured separately (not in `blocks`) so injectM0M1 can subtract its
+    // tokens from the pressure-refold math — recall is NOT a bust trigger.
+    let externalDeltaText = "";
+    const recallRead = readExternalRecallSnapshot(options.db, options.sessionId);
+    if (recallRead.state === "done" && recallRead.snapshot) {
+        const currentRecallHash = computeRecallSnapshotHash(recallRead.snapshot);
+        if (currentRecallHash !== "" && currentRecallHash !== markers.externalRecallHash) {
+            const delta = renderExternalMemoryDelta(recallRead.snapshot);
+            if (delta) {
+                externalDeltaText = delta;
+                blocks.push(delta);
+            }
+        }
+    }
+
     // v2 faithful facts: session_facts is retired as a render source. Fresh
     // facts reach the agent as promoted memories via the new-memories block
     // above (maxMemoryId watermark), not via a <session_facts> delta here.
 
     if (blocks.length === 0) {
-        return { text: M1_EMPTY_PLACEHOLDER, memoryUpdateCount: memoryUpdates.count };
+        return {
+            text: M1_EMPTY_PLACEHOLDER,
+            memoryUpdateCount: memoryUpdates.count,
+            externalDeltaText: "",
+            recomputed: true,
+        };
     }
     return {
         text: `<session-history-since>\n${blocks.join("\n")}\n</session-history-since>`,
         memoryUpdateCount: memoryUpdates.count,
+        externalDeltaText,
+        recomputed: true,
     };
 }
 
@@ -1982,6 +2140,7 @@ interface CachedM0M1Row {
     cached_m0_upgrade_state: string | null;
     cached_m0_system_hash: string | null;
     cached_m0_model_key: string | null;
+    cached_m0_external_recall_hash: string | null;
     memory_block_ids: string | null;
 }
 
@@ -2027,6 +2186,7 @@ function readCachedM0M1Row(db: Database, sessionId: string): CachedM0M1Row | nul
                     cached_m0_upgrade_state,
                     cached_m0_system_hash,
                     cached_m0_model_key,
+                    cached_m0_external_recall_hash,
                     memory_block_ids
                FROM session_meta
               WHERE session_id = ?`,
@@ -2057,6 +2217,7 @@ function markersFromCachedRow(row: CachedM0M1Row): M0SnapshotMarkers | null {
         upgradeState: row.cached_m0_upgrade_state,
         systemHash: row.cached_m0_system_hash ?? "",
         modelKey: row.cached_m0_model_key ?? "",
+        externalRecallHash: row.cached_m0_external_recall_hash ?? "",
     };
 }
 
@@ -2078,7 +2239,8 @@ function cachedRowMatchesState(row: CachedM0M1Row, state: M0M1State): boolean {
         row.cached_m0_session_facts_version === state.cachedM0SessionFactsVersion &&
         (row.cached_m0_upgrade_state ?? null) === (state.cachedM0UpgradeState ?? null) &&
         (row.cached_m0_system_hash ?? "") === (state.cachedM0SystemHash ?? "") &&
-        (row.cached_m0_model_key ?? "") === (state.cachedM0ModelKey ?? "")
+        (row.cached_m0_model_key ?? "") === (state.cachedM0ModelKey ?? "") &&
+        (row.cached_m0_external_recall_hash ?? "") === (state.cachedM0ExternalRecallHash ?? "")
     );
 }
 
@@ -2102,6 +2264,7 @@ function applyCachedRowToState(state: M0M1State, row: CachedM0M1Row): void {
     state.cachedM0UpgradeState = markers.upgradeState;
     state.cachedM0SystemHash = markers.systemHash;
     state.cachedM0ModelKey = markers.modelKey;
+    state.cachedM0ExternalRecallHash = markers.externalRecallHash;
     state.snapshotMarkers = markers;
 }
 
@@ -2130,7 +2293,18 @@ function softRefreshCachedM1(options: M0M1RenderOptions): RenderM1Result {
             const sibling = readCachedM0M1Row(options.db, options.sessionId);
             if (!sibling) throw new RenderM1InvalidMarkersError(options.sessionId);
             applyCachedRowToState(options.state, sibling);
-            return { text: replayCachedM1(options.state), memoryUpdateCount: 0 };
+            // Replayed sibling bytes — must NOT drive the pressure-refold math
+            // (the replayed m[1] may already contain a large external delta from
+            // a prior pass; replaying it should not cause a fold). externalDeltaText
+            // is "" because we did not re-render and cannot identify the delta
+            // boundary in the replayed bytes; the recomputed=false flag is what
+            // actually keeps the backstop off.
+            return {
+                text: replayCachedM1(options.state),
+                memoryUpdateCount: 0,
+                externalDeltaText: "",
+                recomputed: false,
+            };
         }
 
         const markers = markersFromCachedRow(row);
@@ -2265,6 +2439,11 @@ function renderFreshM0NonPersisted(options: M0M1RenderOptions): {
               )
         : [];
     const userMemories = safeGetActiveUserMemories(options.db);
+    // External recall read mirrors materializeM0: render and marker must derive
+    // from the same read.
+    const recallRead = readExternalRecallSnapshot(options.db, options.sessionId);
+    const externalRecall = recallRead.state === "done" ? recallRead.snapshot : null;
+    snapshotMarkers.externalRecallHash = computeRecallSnapshotHash(externalRecall);
     const memoryBudget = options.memoryInjectionBudgetTokens ?? DEFAULT_MEMORY_BUDGET_TOKENS;
     const memoryRenderOptions: MemoryRenderOptions = {
         sourceNameByMemoryId: sourceNamesForMemories({
@@ -2294,6 +2473,7 @@ function renderFreshM0NonPersisted(options: M0M1RenderOptions): {
         historyBudgetTokens: budget,
         userProfileBudgetTokens: options.userProfileBudgetTokens,
         decayPressureMultiplier,
+        externalRecall,
     });
     let attempts = 0;
     while (budget > 0 && historySliceTokens(m0Text) > budget * 1.05 && attempts < 3) {
@@ -2308,6 +2488,7 @@ function renderFreshM0NonPersisted(options: M0M1RenderOptions): {
             historyBudgetTokens: budget,
             userProfileBudgetTokens: options.userProfileBudgetTokens,
             decayPressureMultiplier,
+            externalRecall,
         });
         attempts += 1;
     }
@@ -2359,7 +2540,18 @@ export function injectM0M1(options: M0M1RenderOptions): InjectM0M1Result {
                 materialized.snapshotMarkers,
                 materialized.m1Bytes,
             );
-            m1Render = { text: materialized.m1Text, memoryUpdateCount: 0 };
+            // The fresh-materialize path's m1Render will not drive a pressure
+            // refold (rematerialized=true skips the refold block), so the
+            // externalDeltaText field is logically inert here. Thread it for
+            // shape consistency; the materialize-with-snapshot case would
+            // produce externalDeltaText="" anyway (markers.externalRecallHash
+            // was just stamped to the current hash).
+            m1Render = {
+                text: materialized.m1Text,
+                memoryUpdateCount: 0,
+                externalDeltaText: "",
+                recomputed: true,
+            };
             rematerialized = true;
         } catch (error) {
             if (!(error instanceof MaterializeContentionError)) throw error;
@@ -2412,10 +2604,16 @@ export function injectM0M1(options: M0M1RenderOptions): InjectM0M1Result {
     let m1Text: string;
     let memoryUpdateCount = 0;
     let m1Recomputed = m1Render !== null;
+    // Tracked across whichever RenderM1Result produced the live m[1] text, so
+    // the pressure-refold token math can subtract the late-recall delta.
+    // Replay paths (m1Recomputed=false) skip the refold entirely, so "" is
+    // safe for those branches.
+    let externalDeltaText = "";
 
     if (m1Render) {
         m1Text = m1Render.text;
         memoryUpdateCount = m1Render.memoryUpdateCount;
+        externalDeltaText = m1Render.externalDeltaText;
     } else if (contentionExhausted && freshFallbackRenderedMemoryIds) {
         const freshM1 = renderM1WithMetadata(
             { ...options, preRenderedKeyFilesBlock: preRenderKeyFilesBlock(options) },
@@ -2424,6 +2622,7 @@ export function injectM0M1(options: M0M1RenderOptions): InjectM0M1Result {
         );
         m1Text = freshM1.text;
         memoryUpdateCount = freshM1.memoryUpdateCount;
+        externalDeltaText = freshM1.externalDeltaText;
         m1Recomputed = true;
     } else if (contentionExhausted) {
         m1Text = replayCachedM1(options.state);
@@ -2431,7 +2630,14 @@ export function injectM0M1(options: M0M1RenderOptions): InjectM0M1Result {
         const refreshed = softRefreshCachedM1(options);
         m1Text = refreshed.text;
         memoryUpdateCount = refreshed.memoryUpdateCount;
-        m1Recomputed = true;
+        externalDeltaText = refreshed.externalDeltaText;
+        // Sibling-adoption fallback returns recomputed=false (replayed bytes
+        // must not drive the pressure backstop). The normal soft-refresh path
+        // returns recomputed=true (genuinely re-rendered). Replaying defer
+        // passes' persisted bytes is the same category as the sibling fallback:
+        // the pressure math is a no-op when m1Recomputed is false, and
+        // "replayed bytes must not live-read/refold" still holds.
+        m1Recomputed = refreshed.recomputed;
         m0Text = decodeM0Bytes(options.state.cachedM0Bytes) ?? M0_EMPTY_BODY;
     } else {
         m1Text = replayCachedM1(options.state);
@@ -2464,10 +2670,26 @@ export function injectM0M1(options: M0M1RenderOptions): InjectM0M1Result {
     // ~15% of m[0] tokens". XML-heavy / non-Latin content makes char length
     // diverge sharply from token count, so the ratio must compare tokens on both
     // sides. Computed once; this branch is rare (cache-busting + m1Recomputed).
+    //
+    // External recall content must NEVER CAUSE a fold (spec: not a bust trigger);
+    // it rides along when a fold fires for other reasons. Two layers of
+    // subtraction from m1Tokens: the delta itself (late recall) AND a small
+    // wrapper overhead (every m[1] carries the wrapper, empty or not — not a
+    // drift signal). The wrapper tokens are also subtracted from the absolute
+    // cap budget for symmetry, so a tiny m[0] baseline (where the wrapper
+    // alone would exceed the cap) does not falsely fire a refold when the
+    // only m[1] content is the recall delta.
     const m1HasContent = m1Text !== M1_EMPTY_PLACEHOLDER;
     const m1Tokens = m1HasContent ? estimateTokens(m1Text) : 0;
+    const M1_PRESSURE_WRAPPER_TOKENS = 20;
+    const externalDeltaTokens = externalDeltaText ? estimateTokens(externalDeltaText) : 0;
+    const m1PressureTokens = Math.max(
+        0,
+        m1Tokens - externalDeltaTokens - M1_PRESSURE_WRAPPER_TOKENS,
+    );
+    const m1AbsoluteContentBudget = Math.max(0, m1AbsoluteBudget - M1_PRESSURE_WRAPPER_TOKENS);
     const m0Tokens = estimateTokens(m0Text);
-    const m1OverAbsoluteCap = m1HasContent && m1Tokens > m1AbsoluteBudget;
+    const m1OverAbsoluteCap = m1HasContent && m1PressureTokens > m1AbsoluteContentBudget;
     if (
         !rematerialized &&
         !contentionExhausted &&
@@ -2477,7 +2699,7 @@ export function injectM0M1(options: M0M1RenderOptions): InjectM0M1Result {
             m1OverAbsoluteCap ||
             (m1HasContent &&
                 m0Tokens >= M0_DRIFT_RATIO_FLOOR_TOKENS &&
-                m1Tokens > m0Tokens * M1_DRIFT_RATIO))
+                m1PressureTokens > m0Tokens * M1_DRIFT_RATIO))
     ) {
         try {
             const refolded = materializeWithRetry(options);

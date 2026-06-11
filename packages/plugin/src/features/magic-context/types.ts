@@ -90,6 +90,7 @@ export interface SessionMeta {
     cachedM0SystemHash: string | null;
     cachedM0ToolSetHash: string | null;
     cachedM0ModelKey: string | null;
+    cachedM0ExternalRecallHash: string | null;
     lastObservedModelKey: string | null;
     lastUsageContextLimit: number;
     priorBoundaryOrdinal: number;
