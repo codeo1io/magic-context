@@ -68,6 +68,10 @@ interface RunCompartmentPhaseArgs {
     memoryEnabled?: boolean;
     /** Auto-promotion gate (`memory.auto_promote`). Issue #44. */
     autoPromote?: boolean;
+    /** Embedding provider on/off (config `embedding.provider !== "off"`).
+     *  Gates compartment P1 embedding + project registration at the runner
+     *  call sites — independent of the memory store flags. */
+    embeddingEnabled?: boolean;
     /** Forwarded to compartment runner — see CompartmentRunnerDeps.onCompartmentStatePublished. */
     onCompartmentStatePublished?: (sessionId: string) => void;
     /**
@@ -307,6 +311,7 @@ async function runCompartmentPhaseImpl(args: RunCompartmentPhaseArgs): Promise<{
                 historianTwoPass: args.historianTwoPass,
                 memoryEnabled: args.memoryEnabled,
                 autoPromote: args.autoPromote,
+                embeddingEnabled: args.embeddingEnabled,
                 onCompartmentStatePublished: args.onCompartmentStatePublished,
                 preserveInjectionCacheUntilConsumed: true,
             });
@@ -351,6 +356,7 @@ async function runCompartmentPhaseImpl(args: RunCompartmentPhaseArgs): Promise<{
                 historianTwoPass: args.historianTwoPass,
                 memoryEnabled: args.memoryEnabled,
                 autoPromote: args.autoPromote,
+                embeddingEnabled: args.embeddingEnabled,
                 onCompartmentStatePublished: args.onCompartmentStatePublished,
                 preserveInjectionCacheUntilConsumed: true,
             });

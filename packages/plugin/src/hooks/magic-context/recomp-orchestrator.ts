@@ -60,6 +60,10 @@ export interface ManagedRecompContext {
     historianTimeoutMs: number;
     memoryEnabled: boolean;
     autoPromote: boolean;
+    /** Embedding provider on/off (config `embedding.provider !== "off"`).
+     *  Gates compartment P1 embedding + project registration — independent
+     *  of the memory store flags. */
+    embeddingEnabled: boolean;
     /** Resolved historian fallback chain (config `fallback_models` → builtin). */
     fallbackModels: readonly string[];
     /** Pre-resolved last-resort model key (the live session model). When omitted,
@@ -225,6 +229,7 @@ function buildRecompDeps(ctx: ManagedRecompContext, sessionId: string) {
         directory: ctx.directory,
         memoryEnabled: ctx.memoryEnabled,
         autoPromote: ctx.autoPromote,
+        embeddingEnabled: ctx.embeddingEnabled,
         // Fallback resilience (was missing on the RPC dialog paths):
         //  - fallbackModels: configured chain (e.g. anthropic/claude-sonnet-4-6)
         //  - fallbackModelId: the live session model as a last-ditch retry

@@ -335,9 +335,9 @@ export async function executePartialRecompInternal(
             // v2: recompute raw chunk embeddings for the rebuilt compartments.
             // Partial recomp deletes + reinserts compartments, so their chunk
             // embeddings must be regenerated or the rebuilt rows vanish from
-            // ctx_search semantic results. Gated on memory-enabled, distinct from
+            // ctx_search semantic results. Gated on embeddingEnabled, distinct from
             // fact promotion (which recomp skips). Fire-and-forget, best-effort.
-            if (deps.memoryEnabled !== false) {
+            if (deps.embeddingEnabled !== false) {
                 const projectIdentity = resolveProjectIdentity(sessionDirectory);
                 const liveCompartments = getCompartments(db, sessionId);
                 const chunksToEmbed = liveCompartments.map((c) => ({
