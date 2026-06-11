@@ -87,6 +87,13 @@ export interface CompartmentRunnerDeps {
      */
     memoryEnabled?: boolean;
     /**
+     * Embedding provider on/off (config `embedding.provider !== "off"`).
+     * Gates compartment P1 embedding + project registration — embeddings are
+     * the ctx_search substrate, independent of the memory store. Undefined =
+     * enabled (schema default is the local provider).
+     */
+    embeddingEnabled?: boolean;
+    /**
      * Automatic-promotion gate (`memory.auto_promote` config). When false (and
      * memory is otherwise enabled), tools and search still work, but historian
      * does not auto-promote session facts to memories. Users can still write

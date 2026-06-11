@@ -30,9 +30,10 @@ import {
  * `compartments.p1_embedding` column is left inert; dreamer v2 decides whether
  * to repopulate or drop it.
  *
- * Fire-and-forget + best-effort: a missing/slow embedding provider must never
- * block or fail a historian publish. Gated by `memory.enabled` so a memory-off
- * user never hits the embedding endpoint.
+ * Fire-and-forget + best-effort, mirroring memory promotion: a missing/slow
+ * embedding provider must never block or fail a historian publish. Gated by
+ * `embedding.provider !== "off"` at the runner call sites (no endpoint hits
+ * when embeddings are off); independent of the memory store flags.
  */
 
 export interface CompartmentChunkToEmbed {
