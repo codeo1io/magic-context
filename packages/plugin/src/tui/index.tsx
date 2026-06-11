@@ -405,6 +405,45 @@ const StatusDialog = (props: { api: TuiPluginApi; s: StatusDetail }) => {
                     {s().lastDreamerRunAt && (
                         <R t={t()} l="Dreamer" v={`last ${relTime(s().lastDreamerRunAt!)}`} fg={t().textMuted} />
                     )}
+                    {/* External memory backend (Hindsight) — only when the
+                        provider is configured. Mirrors the text-mode
+                        executeStatus section: provider/endpoint, circuit
+                        breaker state, this session's recall state, and the
+                        best-effort server-side failed-retain count. */}
+                    {s().externalMemory && (() => {
+                        const em = s().externalMemory!
+                        return (
+                            <box flexDirection="column">
+                                <box marginTop={1}>
+                                    <text fg={t().text}><b>External Memory</b></text>
+                                </box>
+                                <R t={t()} l="Provider" v={em.provider} />
+                                {em.endpoint && (
+                                    <R t={t()} l="Endpoint" v={em.endpoint} fg={t().textMuted} />
+                                )}
+                                <R
+                                    t={t()}
+                                    l="Circuit"
+                                    v={em.circuitState ?? "n/a"}
+                                    fg={em.circuitState && em.circuitState !== "closed" ? t().warning : t().textMuted}
+                                />
+                                <R
+                                    t={t()}
+                                    l="Session recall"
+                                    v={em.recallState ?? "not started"}
+                                    fg={em.recallState === "failed" ? t().warning : em.recallState === "done" ? t().accent : t().textMuted}
+                                />
+                                {em.failedRetainCount != null && (
+                                    <R
+                                        t={t()}
+                                        l="Failed retains"
+                                        v={String(em.failedRetainCount)}
+                                        fg={em.failedRetainCount > 0 ? t().warning : t().textMuted}
+                                    />
+                                )}
+                            </box>
+                        )
+                    })()}
                 </box>
             </box>
 
