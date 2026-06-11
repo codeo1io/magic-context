@@ -4,6 +4,12 @@ import { afterEach, beforeEach, describe, expect, it, mock, spyOn } from "bun:te
 import { Database } from "../../../shared/sqlite";
 import { closeQuietly } from "../../../shared/sqlite-helpers";
 import { CATEGORY_DEFAULT_TTL } from "./constants";
+import {
+    _resetExternalMemoryForTests,
+    _setTestExternalBackendFactory,
+    initializeExternalMemory,
+} from "./external-memory";
+import type { ExternalMemoryBackend, ExternalMemoryRetainItem } from "./external-memory-provider";
 import { computeNormalizedHash } from "./normalize-hash";
 
 const mockEmbedText = mock(async () => null);
@@ -107,7 +113,45 @@ afterEach(() => {
             db = null;
         }
     }
+    _resetExternalMemoryForTests();
 });
+
+const HINDSIGHT_TEST_CONFIG = {
+    provider: "hindsight" as const,
+    endpoint: "http://10.0.0.1:8889",
+    project_bank: "mc-{name}-{id8}",
+    main_bank: "main-memory",
+    retain_sources: ["historian", "agent", "dreamer"] as ("historian" | "agent" | "dreamer")[],
+    tags: [] as string[],
+    recall: {
+        enabled: true,
+        timeout_ms: 3000,
+        max_tokens: 2048,
+        dedup_threshold: 0.85,
+        global_tags: [] as string[],
+        global_from_prompt: false,
+        search: true,
+        mental_models: false,
+        profile_mental_models: ["user-preferences"],
+    },
+};
+
+function captureTee(): ExternalMemoryRetainItem[][] {
+    const calls: ExternalMemoryRetainItem[][] = [];
+    _setTestExternalBackendFactory(
+        (): ExternalMemoryBackend => ({
+            backendId: "fake:test",
+            initialize: async () => true,
+            retain: async (items) => {
+                calls.push([...items]);
+                return items.length;
+            },
+            dispose: async () => {},
+        }),
+    );
+    initializeExternalMemory(HINDSIGHT_TEST_CONFIG);
+    return calls;
+}
 
 describe("promotion", () => {
     describe("#given promotable facts", () => {
@@ -398,6 +442,61 @@ describe("promotion", () => {
             expect(getMemoryCount(db, "/repo/project")).toBe(1); // no duplicate insert
             // → the re-observed fact is invisible to active rendering despite recurrence.
             expect(getMemoriesByProject(db, "/repo/project")).toHaveLength(0);
+        });
+    });
+
+    describe("#given external memory tee", () => {
+        it("tees newly inserted facts with project scope", async () => {
+            db = makeMemoryDatabase();
+            const calls = captureTee();
+
+            promoteSessionFactsToMemory(
+                db,
+                "ses_1",
+                "git:rootsha",
+                [{ category: "PROJECT_RULES", content: "tee me" }],
+                { projectName: "myproj" },
+            );
+            await Bun.sleep(10);
+
+            expect(calls.length).toBe(1);
+            expect(calls[0]?.[0]).toMatchObject({
+                content: "tee me",
+                category: "PROJECT_RULES",
+                scope: "project",
+                projectIdentity: "git:rootsha",
+                projectName: "myproj",
+                sourceType: "historian",
+                sessionId: "ses_1",
+            });
+        });
+
+        it("does NOT tee dedup hits", async () => {
+            db = makeMemoryDatabase();
+            const calls = captureTee();
+
+            promoteSessionFactsToMemory(db, "ses_1", "git:rootsha", [
+                { category: "PROJECT_RULES", content: "dup fact" },
+            ]);
+            await Bun.sleep(10);
+            promoteSessionFactsToMemory(db, "ses_2", "git:rootsha", [
+                { category: "PROJECT_RULES", content: "dup fact" },
+            ]);
+            await Bun.sleep(10);
+
+            expect(calls.length).toBe(1);
+        });
+
+        it("does NOT tee non-promotable categories", async () => {
+            db = makeMemoryDatabase();
+            const calls = captureTee();
+
+            promoteSessionFactsToMemory(db, "ses_1", "git:rootsha", [
+                { category: "NOT_A_CATEGORY", content: "skip me" },
+            ]);
+            await Bun.sleep(10);
+
+            expect(calls.length).toBe(0);
         });
     });
 });

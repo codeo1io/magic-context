@@ -12,6 +12,7 @@ import { loadPluginConfig } from "./config";
 import { isDreamerRunnable } from "./config/agent-disable";
 import { getMagicContextBuiltinCommands } from "./features/builtin-commands/commands";
 import { DREAMER_SYSTEM_PROMPT } from "./features/magic-context/dreamer/task-prompts";
+import { initializeExternalMemory } from "./features/magic-context/memory/external-memory";
 import { resolveProjectIdentity } from "./features/magic-context/memory/project-identity";
 import { SIDEKICK_SYSTEM_PROMPT } from "./features/magic-context/sidekick/agent";
 import {
@@ -174,6 +175,7 @@ const plugin: Plugin = async (ctx) => {
     // Start independent dream schedule timer at plugin level (not inside hooks)
     // so overnight dreaming works even when the user isn't chatting.
     if (pluginConfig.enabled) {
+        initializeExternalMemory(pluginConfig.memory?.external);
         const dreamerRunnable = isDreamerRunnable(pluginConfig);
         const timerRegistration = {
             directory: ctx.directory,

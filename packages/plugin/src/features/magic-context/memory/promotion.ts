@@ -2,6 +2,8 @@ import { sessionLog } from "../../../shared/logger";
 import type { Database } from "../../../shared/sqlite";
 import { CATEGORY_DEFAULT_TTL, PROMOTABLE_CATEGORIES } from "./constants";
 import { embedTextForProject } from "./embedding";
+import { teeToExternalBackend } from "./external-memory";
+import type { ExternalMemoryRetainItem } from "./external-memory-provider";
 import { computeNormalizedHash } from "./normalize-hash";
 import { getMemoryByHash, insertMemory, updateMemorySeenCount } from "./storage-memory";
 import { saveEmbedding } from "./storage-memory-embeddings";
@@ -31,7 +33,9 @@ export function promoteSessionFactsToMemory(
     sessionId: string,
     projectPath: string,
     facts: SessionFact[],
+    options?: { projectName?: string },
 ): void {
+    const teedItems: ExternalMemoryRetainItem[] = [];
     for (const fact of facts) {
         if (!isPromotableCategory(fact.category)) {
             continue;
@@ -59,6 +63,15 @@ export function promoteSessionFactsToMemory(
             // Intentional: fire-and-forget embedding — promotion runs infrequently (after historian passes)
             // and the number of new facts per pass is small. Batching adds complexity for negligible benefit.
             void embedAndStoreMemory(db, sessionId, projectPath, memory.id, memory.content);
+            teedItems.push({
+                content: memory.content,
+                category: fact.category,
+                scope: "project",
+                projectIdentity: projectPath,
+                ...(options?.projectName ? { projectName: options.projectName } : {}),
+                sourceType: "historian",
+                sessionId,
+            });
         } catch (error) {
             sessionLog(
                 sessionId,
@@ -66,6 +79,11 @@ export function promoteSessionFactsToMemory(
                 error,
             );
         }
+    }
+
+    // Fire-and-forget batched tee — never blocks or fails promotion.
+    if (teedItems.length > 0) {
+        void teeToExternalBackend("historian", teedItems);
     }
 }
 
