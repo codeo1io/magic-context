@@ -75,6 +75,16 @@ export function stripUnsafeProjectConfigFields(projectRaw: Record<string, unknow
         );
     }
 
+    const memoryBlock = projectRaw.memory;
+    if (isPlainObject(memoryBlock) && "external" in memoryBlock) {
+        delete memoryBlock.external;
+        warnings.push(
+            "Ignoring memory.external from project config (security: the external memory " +
+                "backend endpoint/credentials only honor user-level config — a repository " +
+                "must not redirect or read a user's personal memory store).",
+        );
+    }
+
     for (const agentKey of HIDDEN_AGENT_KEYS) {
         const block = projectRaw[agentKey];
         if (!isPlainObject(block)) continue;
