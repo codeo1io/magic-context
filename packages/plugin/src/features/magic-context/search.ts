@@ -19,6 +19,9 @@ import {
 } from "./memory";
 import { cosineSimilarity } from "./memory/cosine-similarity";
 import { embedText, getProjectEmbeddingSnapshot, isEmbeddingEnabled } from "./memory/embedding";
+import { isExternalSearchEnabled, recallFromExternalBackend } from "./memory/external-memory";
+import { readExternalRecallSnapshot } from "./memory/external-recall-read";
+import { computeNormalizedHash } from "./memory/normalize-hash";
 import { sanitizeFtsQuery } from "./memory/storage-memory-fts";
 import {
     expandWorkspaceIdentitySetWithAliases,
@@ -56,7 +59,7 @@ interface MessageSearchRow {
 
 const messageSearchStatements = new WeakMap<Database, PreparedStatement>();
 
-export type SearchSource = "memory" | "message" | "git_commit";
+export type SearchSource = "memory" | "message" | "git_commit" | "external";
 
 export interface UnifiedSearchOptions {
     limit?: number;
@@ -102,6 +105,10 @@ export interface UnifiedSearchOptions {
      *  in; the auto-search hot path stays single-probe to protect its latency
      *  budget. NL queries with no extractable probes are unaffected either way. */
     explicitSearch?: boolean;
+    /** Override for tests; defaults to module-level isExternalSearchEnabled(). */
+    externalSearchEnabled?: boolean;
+    /** Project name (basename) for external bank resolution. */
+    projectName?: string;
 }
 
 export interface MemorySearchResult {
@@ -147,11 +154,19 @@ export interface GitCommitSearchResult {
     matchType: "semantic" | "fts" | "hybrid";
 }
 
+export interface ExternalSearchResult {
+    source: "external";
+    content: string;
+    score: number;
+    category?: string;
+}
+
 export type UnifiedSearchResult =
     | MemorySearchResult
     | MessageSearchResult
     | CompartmentSearchResult
-    | GitCommitSearchResult;
+    | GitCommitSearchResult
+    | ExternalSearchResult;
 
 function normalizeLimit(limit?: number): number {
     if (typeof limit !== "number" || !Number.isFinite(limit)) {
@@ -934,6 +949,12 @@ function getSourceBoost(result: UnifiedSearchResult): number {
             return MESSAGE_SOURCE_BOOST;
         case "git_commit":
             return GIT_COMMIT_SOURCE_BOOST;
+        case "external":
+            // Below curated memories (1.3) — local rows outrank external
+            // matches when the two are even close, which is the safe default
+            // (a verified local fact is more authoritative than an external
+            // recall of an older, possibly stale statement).
+            return 1.0;
     }
 }
 
@@ -960,6 +981,10 @@ function compareUnifiedResults(left: UnifiedSearchResult, right: UnifiedSearchRe
     if (left.source === "git_commit" && right.source === "git_commit") {
         // Newer commits win ties.
         return right.committedAtMs - left.committedAtMs;
+    }
+
+    if (left.source === "external" && right.source === "external") {
+        return left.content.localeCompare(right.content);
     }
 
     return 0;
@@ -997,16 +1022,94 @@ function searchGitCommits(args: {
     return hits.map(toGitCommitResult);
 }
 
+const EXTERNAL_SEARCH_TIMEOUT_MS = 5_000;
+
+async function searchExternal(args: {
+    db: Database;
+    sessionId: string;
+    projectPath: string;
+    projectName?: string;
+    query: string;
+    limit: number;
+    signal?: AbortSignal;
+}): Promise<ExternalSearchResult[]> {
+    // Tighter bound than the backend's 10s fetch timeout: an explicit tool
+    // call shouldn't hang on a slow Hindsight.
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), EXTERNAL_SEARCH_TIMEOUT_MS);
+    const onOuterAbort = () => controller.abort();
+    args.signal?.addEventListener("abort", onOuterAbort, { once: true });
+    try {
+        const [project, global] = await Promise.all([
+            recallFromExternalBackend(
+                {
+                    query: args.query,
+                    scope: "project",
+                    projectIdentity: args.projectPath,
+                    ...(args.projectName ? { projectName: args.projectName } : {}),
+                    limit: args.limit,
+                },
+                controller.signal,
+            ),
+            recallFromExternalBackend(
+                { query: args.query, scope: "global", limit: args.limit },
+                controller.signal,
+            ),
+        ]);
+
+        // Drop hits already visible in this session's injected <external-memory>
+        // block, and cross-bank duplicates.
+        const { snapshot } = readExternalRecallSnapshot(args.db, args.sessionId);
+        const injectedHashes = new Set<string>();
+        for (const slice of [snapshot?.project, snapshot?.profile, snapshot?.global]) {
+            for (const item of slice ?? []) {
+                injectedHashes.add(computeNormalizedHash(item.content));
+            }
+        }
+        const seen = new Set<string>();
+        const merged: Array<{ content: string; category?: string }> = [];
+        for (const hit of [...project, ...global]) {
+            const hash = computeNormalizedHash(hit.content);
+            if (injectedHashes.has(hash) || seen.has(hash)) continue;
+            seen.add(hash);
+            merged.push(hit);
+        }
+
+        // Rank-based scoring (Hindsight result order is its relevance order).
+        const top = merged.slice(0, args.limit);
+        return top.map(
+            (hit, rank) =>
+                ({
+                    source: "external" as const,
+                    content: previewText(hit.content),
+                    score: linearDecayScore(rank, top.length),
+                    ...(hit.category ? { category: hit.category } : {}),
+                }) satisfies ExternalSearchResult,
+        );
+    } finally {
+        clearTimeout(timeout);
+        args.signal?.removeEventListener("abort", onOuterAbort);
+    }
+}
+
 function resolveSources(sources: SearchSource[] | undefined): Set<SearchSource> {
     if (sources === undefined) {
-        // Default: search all three sources. Facts are deliberately NOT a
-        // source — they're always rendered in <session-history> so searching
-        // them returns content the agent already sees.
+        // Default: search the three local sources. Facts are deliberately NOT
+        // a source — they're always rendered in <session-history> so searching
+        // them returns content the agent already sees. External is opt-in via
+        // the `sources` arg; the runExternal gate downstream also requires
+        // explicitSearch=true so the auto-search hot path never fires an
+        // external roundtrip even if a caller lists "external" in the array.
         return new Set<SearchSource>(["memory", "message", "git_commit"]);
     }
     const set = new Set<SearchSource>();
     for (const source of sources) {
-        if (source === "memory" || source === "message" || source === "git_commit") {
+        if (
+            source === "memory" ||
+            source === "message" ||
+            source === "git_commit" ||
+            source === "external"
+        ) {
             set.add(source);
         }
     }
@@ -1039,6 +1142,17 @@ export async function unifiedSearch(
     const runMessages = activeSources.has("message");
     const runGitCommits = activeSources.has("git_commit") && gitCommitsEnabled;
     const runCompartmentChunks = runMessages && memoryFeatureEnabled && embeddingEnabled;
+
+    // External recall is opt-in AND explicit-only: the auto-search hot path
+    // (every user prompt hint) MUST NOT fire an external roundtrip. The
+    // `options.sources === undefined` clause means callers who pass no
+    // `sources` arg still get external on explicit searches; the auto-search
+    // caller never sets `explicitSearch`, so the gate short-circuits there.
+    const externalEnabled = options.externalSearchEnabled ?? isExternalSearchEnabled();
+    const runExternal =
+        externalEnabled &&
+        options.explicitSearch === true &&
+        (options.sources === undefined || activeSources.has("external"));
 
     // Embed the query ONCE at the top — both memory and git-commit searches
     // need the same vector. Previously each search called `embedQuery`
@@ -1120,7 +1234,7 @@ export async function unifiedSearch(
         limit: tierLimit,
     });
 
-    const [memoryResults, gitCommitResults] = await Promise.all([
+    const [memoryResults, gitCommitResults, externalResults] = await Promise.all([
         runMemory
             ? searchMemories({
                   db,
@@ -1146,9 +1260,20 @@ export async function unifiedSearch(
                   }),
               )
             : Promise.resolve([] as GitCommitSearchResult[]),
+        runExternal
+            ? searchExternal({
+                  db,
+                  sessionId,
+                  projectPath,
+                  projectName: options.projectName,
+                  query: trimmedQuery,
+                  limit: tierLimit,
+                  signal: options.signal,
+              })
+            : Promise.resolve([] as ExternalSearchResult[]),
     ]);
 
-    const results = [...memoryResults, ...messageLikeResults, ...gitCommitResults]
+    const results = [...memoryResults, ...messageLikeResults, ...gitCommitResults, ...externalResults]
         .sort(compareUnifiedResults)
         .slice(0, limit);
 
