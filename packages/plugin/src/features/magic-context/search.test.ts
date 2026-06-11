@@ -17,10 +17,17 @@ import {
 } from "./compartment-chunk-embedding";
 import { appendCompartments, getCompartments, replaceSessionFacts } from "./compartment-storage";
 import { getMemoryById, insertMemory, resetEmbeddingCacheForTests, saveEmbedding } from "./memory";
+import {
+    _resetExternalMemoryForTests,
+    _setTestExternalBackendFactory,
+    initializeExternalMemory,
+} from "./memory/external-memory";
+import type { ExternalMemoryBackend } from "./memory/external-memory-provider";
 import { ensureMessagesIndexed } from "./message-index";
 import { runMigrations } from "./migrations";
 import { unifiedSearch } from "./search";
 import { initializeDatabase } from "./storage-db";
+import { ensureSessionMetaRow } from "./storage-meta-shared";
 
 const readMessages = (sessionId: string) => rawMessagesBySession.get(sessionId) ?? [];
 const embedQuery = async (text: string) => {
@@ -84,6 +91,13 @@ afterEach(() => {
     embeddingQueries.length = 0;
     rawMessagesBySession.clear();
     resetEmbeddingCacheForTests();
+    // Module-level external-memory state (factory + cached backend) must be
+    // wiped after every test in this file. The "external search source"
+    // describe block sets up a stub factory whose last-wins closure would
+    // otherwise be visible to the next test file in the suite (e.g.
+    // transform.test.ts's "injects empty m[0]" test, which would see a
+    // phantom <external-memory> block).
+    _resetExternalMemoryForTests();
 });
 
 describe("unifiedSearch", () => {
@@ -799,5 +813,162 @@ describe("unifiedSearch", () => {
         });
         expect(memoryOffResults.some((result) => result.source === "compartment")).toBe(false);
         expect(embeddingQueries).toEqual([]);
+    });
+});
+
+const HINDSIGHT_TEST_CONFIG = {
+    provider: "hindsight" as const,
+    endpoint: "http://10.1.0.99:8889",
+    project_bank: "mc-{name}-{id8}",
+    main_bank: "main-memory",
+    retain_sources: ["historian", "agent", "dreamer"] as ("historian" | "agent" | "dreamer")[],
+    tags: [] as string[],
+    recall: {
+        enabled: true,
+        timeout_ms: 3000,
+        max_tokens: 2048,
+        dedup_threshold: 0.85,
+        global_tags: [] as string[],
+        global_from_prompt: false,
+        search: true,
+        mental_models: false,
+        profile_mental_models: ["user-preferences"],
+    },
+};
+
+describe("external search source", () => {
+    let db: Database;
+    const sessionId = "ses-external";
+    const projectPath = "/repo/project";
+
+    beforeEach(() => {
+        // Wipe any cached backend instance from a previous test. The
+        // production configIdentity only spans (provider, endpoint, main_bank,
+        // project_bank) — recall.search and retain_sources changes are NOT
+        // identity changes — so a different recall.search in test N does not
+        // invalidate the backend created in test N-1, and the snapshot-seeding
+        // test would otherwise see the prior test's recall() closure.
+        _resetExternalMemoryForTests();
+        db = createTestDb();
+        // v31 columns require a session_meta row before the UPDATE in the
+        // snapshot-seeding test can land. createTestDb already runs migrations.
+        ensureSessionMetaRow(db, sessionId);
+    });
+
+    afterEach(() => {
+        closeQuietly(db);
+    });
+
+    it("explicit search with external enabled returns external hits", async () => {
+        _setTestExternalBackendFactory(
+            (): ExternalMemoryBackend => ({
+                backendId: "fake:search",
+                initialize: async () => true,
+                retain: async () => 0,
+                recall: async (query) =>
+                    query.scope === "project"
+                        ? [{ content: "external project hit" }]
+                        : [{ content: "external global hit" }],
+                dispose: async () => {},
+            }),
+        );
+        initializeExternalMemory(HINDSIGHT_TEST_CONFIG);
+
+        const results = await unifiedSearch(db, sessionId, projectPath, "query", {
+            explicitSearch: true,
+            // Stub the embedding seam like every other test in this file —
+            // without it the memory source falls back to the module-level
+            // embedder and pays a multi-second local-model load that has
+            // nothing to do with what these tests assert (and flirts with
+            // bun's 5s per-test timeout under load).
+            embedQuery: async () => null,
+            isEmbeddingRuntimeEnabled: () => false,
+        });
+        const external = results.filter((r) => r.source === "external");
+        expect(external.length).toBeGreaterThan(0);
+        expect(external.map((r) => r.content)).toContain("external project hit");
+    });
+
+    it("non-explicit search never calls external", async () => {
+        let called = 0;
+        _setTestExternalBackendFactory(
+            (): ExternalMemoryBackend => ({
+                backendId: "fake:search",
+                initialize: async () => true,
+                retain: async () => 0,
+                recall: async () => {
+                    called += 1;
+                    return [];
+                },
+                dispose: async () => {},
+            }),
+        );
+        initializeExternalMemory(HINDSIGHT_TEST_CONFIG);
+
+        await unifiedSearch(db, sessionId, projectPath, "query", {
+            explicitSearch: false,
+            embedQuery: async () => null,
+            isEmbeddingRuntimeEnabled: () => false,
+        });
+        expect(called).toBe(0);
+    });
+
+    it("external excluded when recall.search false", async () => {
+        let called = 0;
+        _setTestExternalBackendFactory(
+            (): ExternalMemoryBackend => ({
+                backendId: "fake:search",
+                initialize: async () => true,
+                retain: async () => 0,
+                recall: async () => {
+                    called += 1;
+                    return [];
+                },
+                dispose: async () => {},
+            }),
+        );
+        initializeExternalMemory({
+            ...HINDSIGHT_TEST_CONFIG,
+            recall: { ...HINDSIGHT_TEST_CONFIG.recall, search: false },
+        });
+
+        await unifiedSearch(db, sessionId, projectPath, "query", {
+            explicitSearch: true,
+            embedQuery: async () => null,
+            isEmbeddingRuntimeEnabled: () => false,
+        });
+        expect(called).toBe(0);
+    });
+
+    it("external hits already injected this session are filtered out", async () => {
+        db.prepare(
+            "UPDATE session_meta SET external_recall_state='done', external_recall_json=? WHERE session_id = ?",
+        ).run(
+            JSON.stringify({
+                project: [{ content: "already injected" }],
+                profile: [],
+                global: [],
+            }),
+            sessionId,
+        );
+        _setTestExternalBackendFactory(
+            (): ExternalMemoryBackend => ({
+                backendId: "fake:search",
+                initialize: async () => true,
+                retain: async () => 0,
+                recall: async () => [{ content: "already injected" }, { content: "fresh hit" }],
+                dispose: async () => {},
+            }),
+        );
+        initializeExternalMemory(HINDSIGHT_TEST_CONFIG);
+
+        const results = await unifiedSearch(db, sessionId, projectPath, "query", {
+            explicitSearch: true,
+            embedQuery: async () => null,
+            isEmbeddingRuntimeEnabled: () => false,
+        });
+        const contents = results.filter((r) => r.source === "external").map((r) => r.content);
+        expect(contents).not.toContain("already injected");
+        expect(contents).toContain("fresh hit");
     });
 });

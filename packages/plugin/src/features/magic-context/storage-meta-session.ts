@@ -40,6 +40,7 @@ const SESSION_META_FALLBACK_SELECTS: Partial<
     cached_m0_system_hash: "NULL AS cached_m0_system_hash",
     cached_m0_tool_set_hash: "NULL AS cached_m0_tool_set_hash",
     cached_m0_model_key: "NULL AS cached_m0_model_key",
+    cached_m0_external_recall_hash: "NULL AS cached_m0_external_recall_hash",
     last_observed_model_key: "NULL AS last_observed_model_key",
     upgrade_reminded_at: "NULL AS upgrade_reminded_at",
 };

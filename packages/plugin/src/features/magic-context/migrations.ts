@@ -1492,6 +1492,35 @@ const MIGRATIONS: Migration[] = [
             `);
         },
     },
+    {
+        // Was v31 on the pre-v0.23 external-memory-backend branch; renumbered
+        // to v33 pre-v0.24-rebase, then to v37 when upstream v0.24 shipped its
+        // own v33/34/35/36, then to v38 when upstream v0.25 took v37. Now v39
+        // after upstream v0.26 shipped its own v37 (drain latch) and v38
+        // (transform_decisions). The body is ensureColumn-idempotent, so a dev
+        // DB that already ran it under an old number re-applies harmlessly.
+        version: 39,
+        description: "External memory v2: session recall snapshot + m[0] recall marker",
+        up: (db: Database) => {
+            // session_meta existence guard — see v30's comment (partial test fixtures).
+            const hasSessionMeta = db
+                .prepare(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='session_meta' LIMIT 1",
+                )
+                .get();
+            if (!hasSessionMeta) return;
+            // Per-session external recall snapshot (post-dedup, post-trim) — the
+            // frozen content every render replays for byte stability.
+            ensureColumn(db, "session_meta", "external_recall_json", "TEXT");
+            ensureColumn(db, "session_meta", "external_recall_state", "TEXT");
+            ensureColumn(db, "session_meta", "external_recall_at", "INTEGER");
+            // m[0] marker: hash of the external content baked into the cached m[0]
+            // ('' = none). NOT a mustMaterialize trigger — drives only the m[1]
+            // <external-memory> delta comparison. No cache-clear needed: the
+            // cachedRowMatchesState comparison normalizes NULL and '' to equal.
+            ensureColumn(db, "session_meta", "cached_m0_external_recall_hash", "TEXT");
+        },
+    },
 ];
 
 /**

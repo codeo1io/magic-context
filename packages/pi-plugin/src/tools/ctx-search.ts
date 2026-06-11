@@ -14,6 +14,8 @@
  * provider for the duration of an expand call.
  */
 
+import { basename } from "node:path";
+
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { getLastCompartmentEndMessage } from "@magic-context/core/features/magic-context/compartment-storage";
 import {
@@ -48,10 +50,11 @@ const ParamsSchema = Type.Object({
 				Type.Literal("memory"),
 				Type.Literal("message"),
 				Type.Literal("git_commit"),
+				Type.Literal("external"),
 			]),
 			{
 				description:
-					'Optional. Restrict to specific sources. Examples: ["git_commit"] for "when did we change X", ["memory"] for naming conventions, ["message"] for "did we discuss this earlier", ["git_commit","message"] for regression hunts. Omit for a broad search across all enabled sources.',
+					'Optional. Restrict to specific sources. Examples: ["git_commit"] for "when did we change X", ["memory"] for naming conventions, ["message"] for "did we discuss this earlier", ["git_commit","message"] for regression hunts, ["external"] for long-term knowledge from past sessions. Omit for a broad search across all enabled sources.',
 			},
 		),
 	),
@@ -104,6 +107,14 @@ function formatResult(result: UnifiedSearchResult, index: number): string {
 		].join("\n");
 	}
 
+	if (result.source === "external") {
+		const categoryPart = result.category ? ` category=${result.category}` : "";
+		return [
+			`[${index}] [external] score=${result.score.toFixed(2)}${categoryPart}`,
+			result.content,
+		].join("\n");
+	}
+
 	const expandStart = Math.max(1, result.messageOrdinal - 3);
 	const expandEnd = result.messageOrdinal + 3;
 	return [
@@ -117,7 +128,7 @@ function formatSearchResults(
 	results: UnifiedSearchResult[],
 ): string {
 	if (results.length === 0) {
-		return `No results found for "${query}" across memories, git commits, or message history.`;
+		return `No results found for "${query}" across memories, git commits, message history, or external knowledge.`;
 	}
 	const bodyParts = results.map((result, index) =>
 		formatResult(result, index + 1),
@@ -153,6 +164,8 @@ export function createCtxSearchTool(
 	return {
 		name: "ctx_search",
 		label: "Magic Context: Search",
+		// Single source of truth: core's CTX_SEARCH_DESCRIPTION (which documents
+		// the external source) — Pi no longer carries a drifted inline copy.
 		description: CTX_SEARCH_DESCRIPTION,
 		parameters: ParamsSchema,
 		async execute(
@@ -228,6 +241,10 @@ export function createCtxSearchTool(
 					// (parity with OpenCode's ctx_search). Pi auto-search leaves
 					// this off to protect its latency budget.
 					explicitSearch: true,
+					// External bank resolution: basename is the human-readable
+					// label the engine uses as a bank template parameter, NOT a
+					// key. Project identity is the key.
+					projectName: ctx.cwd ? basename(ctx.cwd) : undefined,
 				},
 			);
 
