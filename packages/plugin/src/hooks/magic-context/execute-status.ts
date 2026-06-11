@@ -1,5 +1,10 @@
 import { DEFAULT_EXECUTE_THRESHOLD_PERCENTAGE } from "../../config/schema/magic-context";
 import { getCompartments } from "../../features/magic-context/compartment-storage";
+import {
+    fetchExternalFailedRetains,
+    getExternalMemoryStatus,
+} from "../../features/magic-context/memory/external-memory";
+import { readExternalRecallSnapshot } from "../../features/magic-context/memory/external-recall-read";
 import { parseCacheTtl } from "../../features/magic-context/scheduler";
 import { getPendingOps } from "../../features/magic-context/storage";
 import { getOrCreateSessionMeta } from "../../features/magic-context/storage-meta";
@@ -31,7 +36,7 @@ function formatExecuteThreshold(
     return `${thresholdPercentage}%`;
 }
 
-export function executeStatus(
+export async function executeStatus(
     db: Database,
     sessionId: string,
     protectedTags: number,
@@ -43,7 +48,7 @@ export function executeStatus(
     commitClusterTrigger?: { enabled: boolean; min_clusters: number },
     executeThresholdTokens?: { default?: number; [modelKey: string]: number | undefined },
     contextLimit?: number,
-): string {
+): Promise<string> {
     // Single source of truth — resolver tells us both the effective percentage AND
     // which config source won (tokens vs percentage). Previously /ctx-status
     // reimplemented the token-match check here and missed progressive base-model
@@ -183,6 +188,25 @@ export function executeStatus(
             for (const op of pendingOps) {
                 lines.push(`- §${op.tagId}§ → ${op.operation}`);
             }
+        }
+
+        const externalStatus = getExternalMemoryStatus();
+        if (externalStatus) {
+            const { state: recallState } = readExternalRecallSnapshot(db, sessionId);
+            // fetchExternalFailedRetains inherits the 10s fetch timeout and
+            // circuit breaker from HindsightMemoryBackend.request(); null on
+            // every failure path so the field is always safe to surface.
+            const failedRetainCount = await fetchExternalFailedRetains();
+            lines.push(
+                "",
+                "### External memory",
+                `- provider: ${externalStatus.provider} (${externalStatus.endpoint ?? "?"})`,
+                `- circuit: ${externalStatus.circuitState ?? "n/a"}`,
+                `- session recall: ${recallState ?? "not started"}`,
+                ...(failedRetainCount !== null
+                    ? [`- failed retains (server): ${failedRetainCount}`]
+                    : []),
+            );
         }
 
         return lines.join("\n");
