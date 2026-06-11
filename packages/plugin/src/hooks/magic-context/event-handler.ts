@@ -2,6 +2,10 @@ import type { createCompactionHandler } from "../../features/magic-context/compa
 import { scheduleClearAndReindex } from "../../features/magic-context/message-index-async";
 import { detectOverflow } from "../../features/magic-context/overflow-detection";
 import {
+    registerSessionParent,
+    unregisterSessionParent,
+} from "../../features/magic-context/session-parent-registry";
+import {
     clearHistorianFailureState,
     clearPendingCompactionMarkerStateIf,
     clearSession,
@@ -236,6 +240,16 @@ export function createEventHandler(deps: EventHandlerDeps) {
             const info = getSessionCreatedInfo(input.event.properties);
             if (!info) {
                 return;
+            }
+
+            // Track child→parent linkage for ALL child sessions (sidekick,
+            // dreamer, user task subagents). ctx_search resolves through this
+            // so session-scoped reads (message-history boundary, visible
+            // memory ids, injected external-recall snapshot) target the ROOT
+            // conversation instead of the child's empty session_meta. In-memory
+            // only — parentage never spans a restart.
+            if (info.parentID.length > 0) {
+                registerSessionParent(info.id, info.parentID);
             }
 
             // Flag our own hidden children (historian/dreamer/sidekick/
@@ -726,6 +740,7 @@ export function createEventHandler(deps: EventHandlerDeps) {
             clearTransformDecisionSession(sessionId);
             clearMessageTokensCache(sessionId);
             invalidateTrueRawTokenCache({ sessionId, reason: "session.deleted" });
+            unregisterSessionParent(sessionId);
             return;
         }
     };
