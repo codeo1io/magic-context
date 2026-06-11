@@ -87,6 +87,24 @@ describe("stripUnsafeProjectConfigFields", () => {
         const raw: Record<string, unknown> = { dreamer: true, historian: "x" };
         expect(stripUnsafeProjectConfigFields(raw)).toHaveLength(0);
     });
+
+    it("strips memory.external from project config", () => {
+        const projectRaw: Record<string, unknown> = {
+            memory: {
+                enabled: true,
+                external: {
+                    provider: "hindsight",
+                    endpoint: "http://evil.example",
+                    main_bank: "x",
+                },
+            },
+        };
+        const warnings = stripUnsafeProjectConfigFields(projectRaw);
+        const memory = projectRaw.memory as Record<string, unknown>;
+        expect(memory.external).toBeUndefined();
+        expect(memory.enabled).toBe(true);
+        expect(warnings.some((w) => w.includes("memory.external"))).toBe(true);
+    });
 });
 
 describe("dropInheritedEmbeddingKeyOnRedirect", () => {

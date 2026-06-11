@@ -246,6 +246,163 @@ export const EmbeddingConfigSchema = BaseEmbeddingConfigSchema.transform((data) 
 
 export type EmbeddingConfig = z.infer<typeof EmbeddingConfigSchema>;
 
+export const EXTERNAL_MEMORY_RETAIN_SOURCES = ["historian", "agent", "dreamer"] as const;
+export type ExternalMemoryRetainSource = (typeof EXTERNAL_MEMORY_RETAIN_SOURCES)[number];
+
+export const ExternalRecallConfigSchema = z
+    .object({
+        enabled: z
+            .boolean()
+            .default(true)
+            .describe(
+                "Session-start recall from the external backend, merged into the context injection (default: true).",
+            ),
+        timeout_ms: z
+            .number()
+            .min(500)
+            .max(15000)
+            .default(3000)
+            .describe(
+                "Max wait for recall at the first render of a session (already cache-cold). Late results ride the m[1] delta. (default: 3000)",
+            ),
+        max_tokens: z
+            .number()
+            .min(256)
+            .max(8192)
+            .default(2048)
+            .describe(
+                "Token budget per recall slice (project / profile / global each). (default: 2048)",
+            ),
+        dedup_threshold: z
+            .number()
+            .min(0.5)
+            .max(0.99)
+            .default(0.85)
+            .describe(
+                "Cosine similarity above which a recalled item is dropped as a duplicate of a local memory. Hash-only fallback when embeddings are unavailable. (default: 0.85)",
+            ),
+        global_tags: z
+            .array(z.string())
+            .default([])
+            .describe(
+                "Tag filter for the global (main-bank) recall slice, matched with tags_match 'any' (untagged content INCLUDED). Empty = no filter (full autoRecall replacement).",
+            ),
+        global_from_prompt: z
+            .boolean()
+            .default(false)
+            .describe(
+                "Include an excerpt of the session's FIRST user prompt in the global-slice recall query (the project name is always included). The first prompt is fixed for the session, so the query — and the frozen recall snapshot — stays deterministic. Default false: pure template query.",
+            ),
+        search: z
+            .boolean()
+            .default(true)
+            .describe(
+                "Expose the ctx_search 'external' source (project + main bank). (default: true)",
+            ),
+        mental_models: z
+            .boolean()
+            .default(true)
+            .describe(
+                "Use Hindsight mental models as the fast path for the project/profile recall slices (single GET, server-refreshed), falling back to recall when absent/empty. (default: true)",
+            ),
+        profile_mental_models: z
+            .array(z.string())
+            .default(["user-preferences"])
+            .describe(
+                "Main-bank mental-model names (case-insensitive) used for the profile slice. The main bank is never modified by the plugin — create these manually.",
+            ),
+    })
+    .default({
+        enabled: true,
+        timeout_ms: 3000,
+        max_tokens: 2048,
+        dedup_threshold: 0.85,
+        global_tags: [],
+        global_from_prompt: false,
+        search: true,
+        mental_models: true,
+        profile_mental_models: ["user-preferences"],
+    });
+
+export type ExternalRecallConfig = z.infer<typeof ExternalRecallConfigSchema>;
+
+const BaseExternalMemoryConfigSchema = z
+    .object({
+        provider: z
+            .enum(["hindsight", "off"])
+            .default("off")
+            .describe(
+                "External memory backend. 'hindsight' tees memory creations to a Hindsight service; 'off' disables (default). SECURITY: this whole block only honors USER-level config.",
+            ),
+        endpoint: z
+            .string()
+            .optional()
+            .describe(
+                "Backend base URL (e.g. http://10.0.0.1:8889). Required when provider is hindsight.",
+            ),
+        api_key: z.string().optional().describe("Bearer token for the backend (optional)."),
+        project_bank: z
+            .string()
+            .default("mc-{name}-{id8}")
+            .describe(
+                "Bank name template for project-scoped items. Placeholders: {name}=project basename, {id8}=first 8 chars of the project identity hash.",
+            ),
+        main_bank: z
+            .string()
+            .optional()
+            .describe(
+                "Bank for user- and global-scoped items. Required when provider is hindsight. Assumed to pre-exist; never created or modified.",
+            ),
+        retain_sources: z
+            .array(z.enum(EXTERNAL_MEMORY_RETAIN_SOURCES))
+            .default([...EXTERNAL_MEMORY_RETAIN_SOURCES])
+            .describe(
+                "Which creation points tee: historian promotion, agent ctx_memory writes, dreamer user-memory promotion.",
+            ),
+        tags: z
+            .array(z.string())
+            .default([])
+            .describe("Static tags attached to every retained item."),
+        recall: ExternalRecallConfigSchema.describe(
+            "Unified read path: session-start recall + ctx_search external source.",
+        ),
+    })
+    .superRefine((data, ctx) => {
+        if (data.provider === "hindsight" && !data.endpoint?.trim()) {
+            ctx.addIssue({
+                code: "custom",
+                path: ["endpoint"],
+                message: "endpoint is required when memory.external.provider is hindsight",
+            });
+        }
+        if (data.provider === "hindsight" && !data.main_bank?.trim()) {
+            ctx.addIssue({
+                code: "custom",
+                path: ["main_bank"],
+                message: "main_bank is required when memory.external.provider is hindsight",
+            });
+        }
+    });
+
+export const ExternalMemoryConfigSchema = BaseExternalMemoryConfigSchema.transform((data) => {
+    if (data.provider === "off") {
+        return { provider: "off" as const };
+    }
+    const apiKey = data.api_key?.trim();
+    return {
+        provider: "hindsight" as const,
+        endpoint: (data.endpoint?.trim() ?? "").replace(/\/+$/, ""),
+        ...(apiKey ? { api_key: apiKey } : {}),
+        project_bank: data.project_bank.trim() || "mc-{name}-{id8}",
+        main_bank: data.main_bank?.trim() ?? "",
+        retain_sources: data.retain_sources,
+        tags: data.tags,
+        recall: data.recall,
+    };
+});
+
+export type ExternalMemoryConfig = z.infer<typeof ExternalMemoryConfigSchema>;
+
 export interface MagicContextConfig {
     enabled: boolean;
     /** Auto-update the cached OpenCode plugin wrapper when a newer npm version is available.
@@ -357,6 +514,7 @@ export interface MagicContextConfig {
             /** Max commits kept per project; oldest evicted (default: 2000) */
             max_commits: number;
         };
+        external: ExternalMemoryConfig;
     };
     sidekick?: SidekickConfig;
 }
@@ -623,6 +781,9 @@ export const MagicContextConfigSchema = z
                     .describe(
                         "Index git commit messages from HEAD into ctx_search. Commits become a 4th searchable source alongside memories and session history. Graduated from experimental.git_commit_indexing; opt-in, default off (per-project embedding cost). Independent of memory.enabled.",
                     ),
+                external: ExternalMemoryConfigSchema.default({ provider: "off" }).describe(
+                    "External long-term memory backend (tee). USER config only.",
+                ),
             })
             .default({
                 enabled: true,
@@ -631,6 +792,7 @@ export const MagicContextConfigSchema = z
                 retrieval_count_promotion_threshold: 3,
                 auto_search: { enabled: true, score_threshold: 0.6, min_prompt_chars: 20 },
                 git_commit_indexing: { enabled: false, since_days: 365, max_commits: 2000 },
+                external: { provider: "off" },
             })
             .describe("Cross-session memory configuration"),
         sidekick: SidekickConfigSchema.describe(

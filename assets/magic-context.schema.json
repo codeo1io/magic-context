@@ -697,22 +697,6 @@
       }
     },
     "memory": {
-      "default": {
-        "enabled": true,
-        "injection_budget_tokens": 4000,
-        "auto_promote": true,
-        "retrieval_count_promotion_threshold": 3,
-        "auto_search": {
-          "enabled": true,
-          "score_threshold": 0.6,
-          "min_prompt_chars": 20
-        },
-        "git_commit_indexing": {
-          "enabled": false,
-          "since_days": 365,
-          "max_commits": 2000
-        }
-      },
       "description": "Cross-session memory configuration",
       "type": "object",
       "properties": {
@@ -796,6 +780,141 @@
               "type": "number",
               "minimum": 100,
               "maximum": 20000
+            }
+          }
+        },
+        "external": {
+          "description": "External long-term memory backend (tee). USER config only.",
+          "type": "object",
+          "properties": {
+            "provider": {
+              "default": "off",
+              "description": "External memory backend. 'hindsight' tees memory creations to a Hindsight service; 'off' disables (default). SECURITY: this whole block only honors USER-level config.",
+              "type": "string",
+              "enum": [
+                "hindsight",
+                "off"
+              ]
+            },
+            "endpoint": {
+              "description": "Backend base URL (e.g. http://10.0.0.1:8889). Required when provider is hindsight.",
+              "type": "string"
+            },
+            "api_key": {
+              "description": "Bearer token for the backend (optional).",
+              "type": "string"
+            },
+            "project_bank": {
+              "default": "mc-{name}-{id8}",
+              "description": "Bank name template for project-scoped items. Placeholders: {name}=project basename, {id8}=first 8 chars of the project identity hash.",
+              "type": "string"
+            },
+            "main_bank": {
+              "description": "Bank for user- and global-scoped items. Required when provider is hindsight. Assumed to pre-exist; never created or modified.",
+              "type": "string"
+            },
+            "retain_sources": {
+              "default": [
+                "historian",
+                "agent",
+                "dreamer"
+              ],
+              "description": "Which creation points tee: historian promotion, agent ctx_memory writes, dreamer user-memory promotion.",
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "historian",
+                  "agent",
+                  "dreamer"
+                ]
+              }
+            },
+            "tags": {
+              "default": [],
+              "description": "Static tags attached to every retained item.",
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "recall": {
+              "default": {
+                "enabled": true,
+                "timeout_ms": 3000,
+                "max_tokens": 2048,
+                "dedup_threshold": 0.85,
+                "global_tags": [],
+                "global_from_prompt": false,
+                "search": true,
+                "mental_models": true,
+                "profile_mental_models": [
+                  "user-preferences"
+                ]
+              },
+              "description": "Unified read path: session-start recall + ctx_search external source.",
+              "type": "object",
+              "properties": {
+                "enabled": {
+                  "default": true,
+                  "description": "Session-start recall from the external backend, merged into the context injection (default: true).",
+                  "type": "boolean"
+                },
+                "timeout_ms": {
+                  "default": 3000,
+                  "description": "Max wait for recall at the first render of a session (already cache-cold). Late results ride the m[1] delta. (default: 3000)",
+                  "type": "number",
+                  "minimum": 500,
+                  "maximum": 15000
+                },
+                "max_tokens": {
+                  "default": 2048,
+                  "description": "Token budget per recall slice (project / profile / global each). (default: 2048)",
+                  "type": "number",
+                  "minimum": 256,
+                  "maximum": 8192
+                },
+                "dedup_threshold": {
+                  "default": 0.85,
+                  "description": "Cosine similarity above which a recalled item is dropped as a duplicate of a local memory. Hash-only fallback when embeddings are unavailable. (default: 0.85)",
+                  "type": "number",
+                  "minimum": 0.5,
+                  "maximum": 0.99
+                },
+                "global_tags": {
+                  "default": [],
+                  "description": "Tag filter for the global (main-bank) recall slice, matched with tags_match 'any' (untagged content INCLUDED). Empty = no filter (full autoRecall replacement).",
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "global_from_prompt": {
+                  "default": false,
+                  "description": "Include an excerpt of the session's FIRST user prompt in the global-slice recall query (the project name is always included). The first prompt is fixed for the session, so the query — and the frozen recall snapshot — stays deterministic. Default false: pure template query.",
+                  "type": "boolean"
+                },
+                "search": {
+                  "default": true,
+                  "description": "Expose the ctx_search 'external' source (project + main bank). (default: true)",
+                  "type": "boolean"
+                },
+                "mental_models": {
+                  "default": true,
+                  "description": "Use Hindsight mental models as the fast path for the project/profile recall slices (single GET, server-refreshed), falling back to recall when absent/empty. (default: true)",
+                  "type": "boolean"
+                },
+                "profile_mental_models": {
+                  "default": [
+                    "user-preferences"
+                  ],
+                  "description": "Main-bank mental-model names (case-insensitive) used for the profile slice. The main bank is never modified by the plugin — create these manually.",
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              }
             }
           }
         }
