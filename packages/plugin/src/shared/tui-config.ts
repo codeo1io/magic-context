@@ -12,26 +12,17 @@ import { getOpenCodeConfigPaths } from "./opencode-config-dir";
 const PLUGIN_NAME = "@cortexkit/opencode-magic-context";
 const PLUGIN_ENTRY = `${PLUGIN_NAME}@latest`;
 
-/**
- * Detect whether a tui.json plugin entry already references magic-context, in
- * any form. Covers:
- *   - Bare npm name: "@cortexkit/opencode-magic-context"
- *   - Versioned npm: "@cortexkit/opencode-magic-context@latest" / "@0.15.7" / etc.
- *   - Local dev directory path (absolute or relative): ".../magic-context"
- *     or ".../magic-context/packages/plugin"
- *   - file:// URLs pointing at the same paths
- *   - Tarball paths ending in opencode-magic-context-*.tgz
- *
- * Without the path/URL detection, doctor/setup auto-injection adds the npm
- * @latest entry on top of an existing dev path, double-loading the plugin.
- */
 function isMagicContextEntry(entry: string): boolean {
     if (!entry) return false;
     if (entry === PLUGIN_NAME) return true;
     if (entry.startsWith(`${PLUGIN_NAME}@`)) return true;
-    // Local directory paths: match anywhere in the string so the setup pattern
-    // (dir-only, dir + /packages/plugin, file:// + either) all qualify.
+    // Tarball or any path containing the full npm package name.
     if (entry.includes("opencode-magic-context")) return true;
+    // Local dev directory paths (absolute, relative, or file:// URLs):
+    // ".../magic-context" or ".../magic-context/packages/plugin".
+    // Match "magic-context" as a whole path segment so unrelated entries
+    // (e.g. "not-magic-contexts") don't false-positive.
+    if (/(^|\/)magic-context(\/|$)/.test(entry)) return true;
     return false;
 }
 
