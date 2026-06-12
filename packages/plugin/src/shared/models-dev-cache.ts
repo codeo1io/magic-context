@@ -199,6 +199,22 @@ export async function refreshModelLimitsFromApi(
     client: OpencodeClientLike,
     options?: { retries?: number; retryDelayMs?: number },
 ): Promise<void> {
+    // CACHE-FIRST: seed the in-memory map from the persisted last-known-good
+    // file SYNCHRONOUSLY before any await. This is the only change to the
+    // boot path: a persisted cache (when present) populates the map the
+    // moment the caller kicks off the background refresh, so any
+    // `getSdkContextLimit()` lookup — including the first one, which
+    // historically fired only after whatever other startup work had cleared
+    // — returns a real answer with no wait on the API.
+    //
+    // `loadPersistedApiCacheOnce()` is idempotent (no-op when the cache is
+    // already populated or the file was already attempted this process),
+    // so this is safe to call here and will not overwrite a fresh API
+    // result on subsequent calls. With no persisted file, the file read
+    // throws and is caught — the eager preload becomes a no-op and the
+    // existing retry path is preserved verbatim.
+    loadPersistedApiCacheOnce();
+
     const attempts = Math.max(1, (options?.retries ?? 0) + 1);
     const delayMs = options?.retryDelayMs ?? 1000;
     for (let attempt = 1; attempt <= attempts; attempt++) {
