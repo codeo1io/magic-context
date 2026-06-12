@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -261,6 +261,148 @@ describe("models-dev-cache (SDK-only)", () => {
             },
         });
         expect(getModelsDevCacheState().apiLoaded).toBe(false);
+    });
+
+    describe("cache-first boot", () => {
+        function persistedFilePath(): string {
+            return join(
+                tempDir,
+                "cortexkit",
+                "magic-context",
+                "model-context-limits-opencode.json",
+            );
+        }
+
+        test("persisted cache seeds the in-memory map synchronously, before the API refresh resolves", async () => {
+            // First run: warm + persist so the persisted file exists for the
+            // "next boot" we're about to simulate.
+            await refreshModelLimitsFromApi(
+                makeClient([{ id: "openai", models: { "gpt-5.5": { limit: { input: 272000 } } } }]),
+            );
+
+            // Simulate a restart: in-memory cache gone, persisted file remains.
+            clearModelsDevCache();
+            expect(getModelsDevCacheState().apiLoaded).toBe(false);
+
+            // A deferred fetch — we control when (or if) it resolves. Models
+            // the boot-time state where OpenCode's provider service isn't
+            // ready yet: the SDK call hangs, no payload comes back.
+            let resolveFetch: (value: { data?: { providers?: unknown[] } }) => void = () => {};
+            const fetchPromise = new Promise<{ data?: { providers?: unknown[] } }>((resolve) => {
+                resolveFetch = resolve;
+            });
+            const deferredClient = { config: { providers: () => fetchPromise } };
+
+            // Kick off the background refresh. Do NOT await — the test asserts
+            // that the in-memory map is populated synchronously inside the
+            // function body, before the first `await`, so the very next
+            // `getSdkContextLimit` lookup returns the persisted value with no
+            // wait on the API.
+            const refreshPromise = refreshModelLimitsFromApi(deferredClient, {
+                retries: 0,
+                retryDelayMs: 1,
+            });
+
+            // CACHE-FIRST: the persisted cache must be loaded SYNCHRONOUSLY
+            // by refreshModelLimitsFromApi before any await, so the lookup
+            // resolves immediately from the persisted cache — even though
+            // the API fetch is still pending (and may never resolve).
+            expect(getModelsDevCacheState().apiLoaded).toBe(true);
+            expect(getSdkContextLimit("openai", "gpt-5.5")).toBe(272000);
+
+            // Let the background refresh complete (with an empty payload —
+            // no overwrite) so the test can finish cleanly.
+            resolveFetch({ data: { providers: [] } });
+            await refreshPromise;
+        });
+
+        test("background API refresh success later swaps the in-memory map AND persists the new values", async () => {
+            // First run: warm + persist with one set of values.
+            await refreshModelLimitsFromApi(
+                makeClient([{ id: "openai", models: { "gpt-5.5": { limit: { input: 272000 } } } }]),
+            );
+
+            // Simulate a restart: in-memory cache gone, persisted file remains.
+            clearModelsDevCache();
+
+            // Deferred fetch returning FRESH data (different limit value).
+            let resolveFetch: (value: { data?: { providers?: unknown[] } }) => void = () => {};
+            const fetchPromise = new Promise<{ data?: { providers?: unknown[] } }>((resolve) => {
+                resolveFetch = resolve;
+            });
+            const deferredClient = { config: { providers: () => fetchPromise } };
+
+            // Kick off the background refresh.
+            const refreshPromise = refreshModelLimitsFromApi(deferredClient, {
+                retries: 0,
+                retryDelayMs: 1,
+            });
+
+            // CACHE-FIRST: the in-memory map is populated SYNCHRONOUSLY by
+            // refreshModelLimitsFromApi before the first await, so the
+            // lookup serves the OLD persisted value (272000) even though the
+            // API refresh is still in flight.
+            expect(getModelsDevCacheState().apiLoaded).toBe(true);
+            expect(getSdkContextLimit("openai", "gpt-5.5")).toBe(272000);
+
+            // Now resolve the fetch with FRESH data.
+            resolveFetch({
+                data: {
+                    providers: [
+                        {
+                            id: "openai",
+                            models: { "gpt-5.5": { limit: { input: 100000 } } },
+                        },
+                    ],
+                },
+            });
+
+            // Let the refresh function complete. The in-memory map is
+            // atomically swapped to the API data; the persisted file is
+            // rewritten with the new values.
+            await refreshPromise;
+
+            // The in-memory map was swapped to the API data.
+            expect(getSdkContextLimit("openai", "gpt-5.5")).toBe(100000);
+            expect(getModelsDevCacheState().apiCount).toBe(1);
+
+            // And the new value was persisted to disk so the NEXT process
+            // cold-starts with it (not the stale 272k).
+            const persistedRaw = readFileSync(persistedFilePath(), "utf-8");
+            const persisted = JSON.parse(persistedRaw) as Record<string, number>;
+            expect(persisted["openai/gpt-5.5"]).toBe(100000);
+        });
+
+        test("without a persisted cache, the cache is populated only when the API refresh succeeds (no synchronous preload)", async () => {
+            // No persisted cache exists (fresh beforeEach, nothing persisted).
+            expect(getModelsDevCacheState().apiLoaded).toBe(false);
+
+            let calls = 0;
+            const client = {
+                config: {
+                    providers: async () => {
+                        calls++;
+                        return {
+                            data: {
+                                providers: [
+                                    { id: "p", models: { m: { limit: { context: 200000 } } } },
+                                ],
+                            },
+                        };
+                    },
+                },
+            };
+
+            // With no persisted file, the eager preload inside
+            // refreshModelLimitsFromApi is a no-op (the file read fails and
+            // is caught). The existing retry-loop behavior is unchanged: the
+            // first successful fetch populates the cache.
+            await refreshModelLimitsFromApi(client, { retries: 0, retryDelayMs: 1 });
+
+            expect(calls).toBe(1);
+            expect(getSdkContextLimit("p", "m")).toBe(200000);
+            expect(getModelsDevCacheState().apiLoaded).toBe(true);
+        });
     });
 
     test("repeated refreshes replace cache state without corruption", async () => {
