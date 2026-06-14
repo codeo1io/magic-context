@@ -251,12 +251,16 @@ async function dedupAndTrim(
             // embedded with the same model as the recalled items. Mismatched
             // vectors (different dimensionality or space) produce meaningless
             // cosine scores and must be excluded.
+            // When the query model is unknown ("off" / falsy), cosine dedup is
+            // meaningless across potentially different embedding spaces — fall
+            // back to hash-only dedup by keeping localVectors empty.
             const queryModelId = recalledResult.modelId;
-            localVectors = [...stored.values()]
-                .filter(
-                    (e) => !queryModelId || queryModelId === "off" || e.modelId === queryModelId,
-                )
-                .map((e) => e.embedding);
+            localVectors =
+                queryModelId && queryModelId !== "off"
+                    ? [...stored.values()]
+                          .filter((e) => e.modelId === queryModelId)
+                          .map((e) => e.embedding)
+                    : [];
             if (userContents.length > 0) {
                 const userResult = await embedBatchForProject(projectIdentity, userContents);
                 if (userResult) {
