@@ -41,6 +41,13 @@ import {
 	renewCompartmentLease,
 } from "@magic-context/core/features/magic-context/compartment-lease";
 import { getCompartments } from "@magic-context/core/features/magic-context/compartment-storage";
+import {
+	getExternalRecallConfig,
+} from "@magic-context/core/features/magic-context/memory/external-memory";
+import {
+	maybeAwaitExternalRecall,
+	startSessionRecall,
+} from "@magic-context/core/features/magic-context/memory/external-recall";
 import { resolveProjectIdentity } from "@magic-context/core/features/magic-context/memory/project-identity";
 import {
 	clearSessionTracking,
@@ -1475,10 +1482,60 @@ export function registerPiContextHandler(
 			// counter persists across plugin restarts via the
 			// `session_meta.counter` column.
 			tagger.initFromDb(sessionId, options.db);
-			const isFirstContextPassForSession =
-				!firstContextPassSeenBySession.has(sessionId);
-			firstContextPassSeenBySession.add(sessionId);
-			const piUsage = ctx.getContextUsage?.();
+		const isFirstContextPassForSession =
+			!firstContextPassSeenBySession.has(sessionId);
+		firstContextPassSeenBySession.add(sessionId);
+
+		// Fire external-memory session recall on the first pass. Mirrors
+		// OpenCode transform.ts `startSessionRecall` (fires once per session
+		// when `!loadedSessions.has(sessionId)`). The recall is async and
+		// bounded by recall.timeout_ms; `maybeAwaitExternalRecall` below
+		// waits for it only when the first m[0] materialization is imminent.
+		if (isFirstContextPassForSession) {
+			const firstUserPrompt = getExternalRecallConfig()?.global_from_prompt
+				? (() => {
+						// Extract the first meaningful user message text for the
+						// global recall query enrichment (recall.global_from_prompt).
+						// Mirrors OpenCode's extractFirstUserPromptText.
+						const msgs = event.messages as Array<{
+							role?: string;
+							content?: unknown;
+						}>;
+						for (const msg of msgs) {
+							if (msg.role !== "user") continue;
+							const text =
+								typeof msg.content === "string"
+									? msg.content
+									: Array.isArray(msg.content)
+										? msg.content
+												.filter(
+													(p): p is { type: string; text: string } =>
+														p !== null &&
+														typeof p === "object" &&
+														(p as { type?: unknown }).type === "text" &&
+														typeof (p as { text?: unknown }).text === "string",
+												)
+												.map((p) => p.text)
+												.join(" ")
+										: "";
+							const trimmed = text.trim();
+							if (trimmed.length > 0) return trimmed;
+						}
+						return undefined;
+					})()
+				: undefined;
+			startSessionRecall({
+				db: options.db,
+				sessionId,
+				projectIdentity,
+				projectName: projectDirectory
+					? projectDirectory.split("/").filter(Boolean).at(-1) ?? projectIdentity
+					: projectIdentity,
+				...(firstUserPrompt ? { firstUserPrompt } : {}),
+			});
+		}
+
+		const piUsage = ctx.getContextUsage?.();
 			const tModelDetect = performance.now();
 			// Seed the in-memory model key from the JSONL on the first pass after a
 			// (re)start. liveModelBySession is volatile, so without this a model
@@ -3989,6 +4046,22 @@ async function runPipeline(args: RunPipelineArgs): Promise<RunPipelineResult> {
 		if (typeof realId === "string" && realId.length > 0) {
 			postCommitEntryIdByRef.set(m as object, realId);
 		}
+	}
+
+	// External memory v2 hybrid A-path: when the FIRST m[0] render is
+	// imminent (no cached baseline — the provider cache is already cold),
+	// give the in-flight recall up to recall.timeout_ms to land so the
+	// first materialization bakes it in. Never fires once a baseline
+	// exists; late recalls ride the m[1] delta instead. Mirrors OpenCode
+	// transform.ts `maybeAwaitExternalRecall` call (before runPostTransformPhase).
+	if (args.injection) {
+		const hasCachedM0 =
+			getOrCreateSessionMeta(args.db, args.sessionId).cachedM0Bytes !== null;
+		await maybeAwaitExternalRecall({
+			db: args.db,
+			sessionId: args.sessionId,
+			hasCachedM0,
+		});
 	}
 
 	// 6. <session-history> injection — writes compartments, facts, and
