@@ -48,6 +48,7 @@ import {
 	getOverflowState,
 	recordOverflowDetected,
 } from "@magic-context/core/features/magic-context/storage-meta-persisted";
+import { initializeExternalMemory } from "@magic-context/core/features/magic-context/memory/external-memory";
 import { runDeferredV22Backfill } from "@magic-context/core/features/magic-context/v22-deferred-backfill";
 import {
 	deriveHistorianChunkTokens,
@@ -536,6 +537,13 @@ export default async function (pi: ExtensionAPI): Promise<void> {
 		info("plugin DISABLED via config (enabled: false) — skipping registration");
 		return;
 	}
+
+	// Arm the external-memory backend (Hindsight). Mirrors OpenCode's
+	// `initializeExternalMemory(pluginConfig.memory?.external)` call at
+	// plugin startup. Must run before any tool registration so that the
+	// ctx_memory tee and ctx_search external source are live from the
+	// first tool call. No-op when memory.external.provider is "off".
+	initializeExternalMemory(config.memory?.external);
 
 	await ensureProjectRegisteredFromPiDirectory(projectDir, db);
 	info(`registered embedding config for project ${projectIdentity}`);
