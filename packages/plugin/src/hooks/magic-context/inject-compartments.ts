@@ -1460,7 +1460,7 @@ export function renderExternalMemoryBlock(snapshot: ExternalRecallSnapshot): str
 
 /** m[1] delta when recall settles after the last m[0] fold — carries ALL
  *  slices (profile lines reconcile into <user-profile> at the next HARD fold). */
-function renderExternalMemoryDelta(snapshot: ExternalRecallSnapshot): string {
+export function renderExternalMemoryDelta(snapshot: ExternalRecallSnapshot): string {
     const body = renderExternalDeltaLines(snapshot);
     if (body.length === 0) return "";
     return [
