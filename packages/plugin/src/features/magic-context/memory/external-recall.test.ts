@@ -6,6 +6,7 @@ import { closeQuietly } from "../../../shared/sqlite-helpers";
 import { runMigrations } from "../migrations";
 import { initializeDatabase } from "../storage-db";
 import { ensureSessionMetaRow } from "../storage-meta-shared";
+import { resetEmbeddingCacheForTests } from "./embedding-cache";
 import {
     _resetExternalMemoryForTests,
     _setTestExternalBackendFactory,
@@ -20,7 +21,6 @@ import {
     waitForSessionRecall,
 } from "./external-recall";
 import { computeRecallSnapshotHash, readExternalRecallSnapshot } from "./external-recall-read";
-import { resetEmbeddingCacheForTests } from "./embedding-cache";
 
 const mockEmbedBatch = mock(async () => null);
 const mockLog = mock(() => {});
@@ -477,9 +477,7 @@ describe("embedding model-guard (regression: cross-model cosine dedup)", () => {
         expect(localVectors[0]).toEqual(new Float32Array([1, 0]));
 
         // model-B vector is excluded — different embedding space.
-        const modelBPresent = localVectors.some(
-            (v) => v[0] === 0 && v[1] === 1,
-        );
+        const modelBPresent = localVectors.some((v) => v[0] === 0 && v[1] === 1);
         expect(modelBPresent).toBe(false);
     });
 });

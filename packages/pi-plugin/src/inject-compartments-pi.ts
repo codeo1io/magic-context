@@ -26,19 +26,18 @@
  */
 
 import {
+	computeRecallSnapshotHash,
+	type ExternalRecallSnapshot,
+	readExternalRecallHash,
+	readExternalRecallSnapshot,
+} from "@magic-context/core/features/magic-context/memory/external-recall-read";
+import {
 	getMaxMemoryIdForProjects,
 	getMemoriesByProject,
 	getMemoriesByProjects,
 	readNewMemoriesForM1Union,
 } from "@magic-context/core/features/magic-context/memory/storage-memory";
 import type { Memory } from "@magic-context/core/features/magic-context/memory/types";
-import {
-	computeRecallSnapshotHash,
-	type ExternalRecallSnapshot,
-	readExternalRecallHash,
-	readExternalRecallSnapshot,
-} from "@magic-context/core/features/magic-context/memory/external-recall-read";
-import { renderExternalMemoryBlock } from "@magic-context/core/hooks/magic-context/inject-compartments";
 import {
 	type ContextDatabase,
 	clearCachedM0M1,
@@ -78,6 +77,7 @@ import {
 	type MemoryRenderOptions,
 	type PreparedCompartmentInjection,
 	prepareCompartmentInjection,
+	renderExternalMemoryBlock,
 	renderMemoryBlockV2,
 	trimMemoriesToBudgetV2,
 	trimUserMemoriesToBudget,
@@ -1853,7 +1853,7 @@ function readCachedPiM0M1Row(
 ): CachedPiM0M1Row | null {
 	return db
 		.prepare(
-		`SELECT cached_m0_bytes, cached_m1_bytes,
+			`SELECT cached_m0_bytes, cached_m1_bytes,
 				cached_m0_project_memory_epoch,
 				cached_m0_workspace_fingerprint,
 				cached_m0_project_user_profile_version,
