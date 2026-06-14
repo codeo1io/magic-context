@@ -1491,3 +1491,90 @@ describe("mustMaterializePi — SOFT/HARD taxonomy (parity with OpenCode)", () =
 		}
 	});
 });
+
+describe("Pi external m[1] delta pressure-refold exclusion (cache parity)", () => {
+	// RED-GREEN regression for Finding #1: a large external-recall delta in m[1]
+	// must NEVER trigger the pressure-refold backstop. The fix subtracts
+	// externalDeltaTokens + wrapper overhead from the pressure comparison so
+	// late recall "must NEVER cause a fold" (parity with OpenCode injectM0M1).
+	//
+	// Setup: materialize m[0] with a small compartment (m[0] tokens ≈ small).
+	// Then seed a large external recall snapshot whose token count exceeds
+	// 15% of m[0] tokens. On a cache-busting pass the pressure math must
+	// exclude the external delta and NOT call materializeM0PiWithRetry.
+	//
+	// RED (without fix): m1PressureTokens = m1Tokens (no subtraction) →
+	//   large delta crosses the 15% ratio → materializeM0PiWithRetry called →
+	//   m[0] bytes change → test FAILS.
+	// GREEN (with fix): m1PressureTokens = m1Tokens - externalDeltaTokens -
+	//   wrapper → ratio not crossed → no refold → m[0] bytes unchanged → PASSES.
+
+	it("large external m[1] delta does NOT trigger pressure refold (m[0] bytes stable)", () => {
+		const db = createTestDb();
+		const cwd = mkdtempSync(join(tmpdir(), "pi-ext-pressure-"));
+		try {
+			const state = piState("ses-pi-ext-pressure", cwd);
+
+			// Materialize m[0] with a compartment large enough to clear the
+			// M0_DRIFT_RATIO_FLOOR_TOKENS=500 gate (so the ratio test can fire).
+			// ~600 tokens of body content ensures m[0] > 500 tokens.
+			const m0Body = "word ".repeat(600); // ~600 tokens
+			appendCompartments(db, state.sessionId, [
+				{
+					sequence: 0,
+					startMessage: 1,
+					endMessage: 1,
+					startMessageId: "entry-0",
+					endMessageId: "entry-0",
+					title: "Large",
+					content: `U: large turn\n${m0Body}`,
+					p1: `U: large turn\n${m0Body}`,
+				},
+			]);
+			const firstPass = [userMessage("hello", 10)];
+			const r0 = injectM0M1Pi(state, db, firstPass as never, ["entry-0"], true);
+			expect(r0.m0Materialized).toBe(true);
+			const baselineM0 = textOf(firstPass[0] as never);
+			const baselineM0Bytes = baselineM0.length;
+
+			// Seed a large external recall snapshot AFTER m[0] was materialized.
+			// The snapshot hash differs from the m[0] baseline hash (which is "")
+			// so the delta will be rendered into m[1]. Make it large enough to
+			// exceed 15% of m[0] tokens (m[0] is small, so even a moderate delta
+			// crosses the ratio without the fix).
+			// ~200 tokens of content — well above 15% of m[0] (~600 tokens).
+			// Without the fix, this delta alone would cross the ratio and trigger
+			// a refold. With the fix, it is subtracted from m1PressureTokens.
+			const largeContent = "word ".repeat(200); // ~200 tokens
+			db.prepare(
+				"UPDATE session_meta SET external_recall_state = ?, external_recall_json = ?, external_recall_at = ? WHERE session_id = ?",
+			).run(
+				"done",
+				JSON.stringify({
+					project: [{ content: largeContent }],
+					profile: [],
+					global: [],
+				}),
+				Date.now(),
+				state.sessionId,
+			);
+
+			// Cache-busting pass: recomputeM1ThisPass=true. The external delta
+			// will be rendered into m[1]. The pressure backstop must NOT fire.
+			const secondPass = [userMessage("hello", 11)];
+			const r1 = injectM0M1Pi(state, db, secondPass as never, ["entry-0"], true);
+
+			// (a) m[0] NOT re-materialized — external delta must not trigger refold.
+			expect(r1.m0Materialized).toBe(false);
+			// (b) m[0] bytes byte-identical to the baseline (cache-stable).
+			const m0After = textOf(secondPass[0] as never);
+			expect(m0After.length).toBe(baselineM0Bytes);
+			expect(m0After).toBe(baselineM0);
+			// (c) m[1] contains the external delta.
+			expect(textOf(secondPass[1] as never)).toContain(largeContent);
+		} finally {
+			rmSync(cwd, { recursive: true, force: true });
+			closeQuietly(db);
+		}
+	});
+});

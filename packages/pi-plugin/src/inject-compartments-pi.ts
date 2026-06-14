@@ -78,6 +78,7 @@ import {
 	type PreparedCompartmentInjection,
 	prepareCompartmentInjection,
 	renderExternalMemoryBlock,
+	renderExternalMemoryDelta,
 	renderMemoryBlockV2,
 	trimMemoriesToBudgetV2,
 	trimUserMemoriesToBudget,
@@ -1645,6 +1646,14 @@ function renderMemoryUpdatesBlockPi(args: {
 interface RenderM1PiResult {
 	text: string;
 	memoryUpdateCount: number;
+	/** The <external-memory> delta block (late-arrival snapshot) when present,
+	 *  "" otherwise. Excluded from the injectM0M1Pi pressure-refold token math
+	 *  so a large recall can NEVER cause an m[0] refold (parity with OpenCode). */
+	externalDeltaText: string;
+	/** True when freshly rendered from current DB state. False when replayed
+	 *  from a sibling-adoption row. The pressure-refold backstop must only fire
+	 *  on recomputed bytes (parity with OpenCode RenderM1Result.recomputed). */
+	recomputed: boolean;
 }
 
 function renderM1PiWithMetadata(
@@ -1767,14 +1776,24 @@ function renderM1PiWithMetadata(
 
 	// External memory delta: when the live recall hash differs from the m[0]
 	// baseline hash, surface the current recall snapshot as a delta. Mirrors
-	// OpenCode renderM1's renderExternalMemoryDelta path. The delta carries ALL
-	// slices (profile lines reconcile into <user-profile> at the next HARD fold).
-	const liveExternalRecallHash = readExternalRecallHash(db, state.sessionId);
-	if (liveExternalRecallHash !== markers.externalRecallHash) {
-		const recallRead = readExternalRecallSnapshot(db, state.sessionId);
-		if (recallRead.state === "done" && recallRead.snapshot) {
-			const externalBlock = renderExternalMemoryBlock(recallRead.snapshot);
-			if (externalBlock) sections.push(externalBlock);
+	// OpenCode renderM1WithMetadata's renderExternalMemoryDelta path. The delta
+	// carries ALL slices including profile (profile lines reconcile into
+	// <user-profile> at the next HARD fold). Captured separately so the caller
+	// can subtract its tokens from the pressure-refold math — recall is NOT a
+	// bust trigger (parity with OpenCode RenderM1Result.externalDeltaText).
+	let externalDeltaText = "";
+	const recallRead = readExternalRecallSnapshot(db, state.sessionId);
+	if (recallRead.state === "done" && recallRead.snapshot) {
+		const currentRecallHash = computeRecallSnapshotHash(recallRead.snapshot);
+		if (
+			currentRecallHash !== "" &&
+			currentRecallHash !== markers.externalRecallHash
+		) {
+			const delta = renderExternalMemoryDelta(recallRead.snapshot);
+			if (delta) {
+				externalDeltaText = delta;
+				sections.push(delta);
+			}
 		}
 	}
 
@@ -1782,6 +1801,8 @@ function renderM1PiWithMetadata(
 		return {
 			text: PI_M1_PLACEHOLDER,
 			memoryUpdateCount: memoryUpdates.count,
+			externalDeltaText: "",
+			recomputed: true,
 		};
 	}
 	// Join with "\n" (single newline) to match OpenCode renderM1 exactly — the
@@ -1789,6 +1810,8 @@ function renderM1PiWithMetadata(
 	return {
 		text: `<session-history-since>\n${sections.join("\n")}\n</session-history-since>`,
 		memoryUpdateCount: memoryUpdates.count,
+		externalDeltaText,
+		recomputed: true,
 	};
 }
 
@@ -2015,6 +2038,7 @@ function softRefreshCachedM1Pi(args: {
 	markers: PiM0SnapshotMarkers;
 	memoryUpdateCount: number;
 	recomputed: boolean;
+	externalDeltaText: string;
 } {
 	const preRenderedKeyFilesBlock = preRenderKeyFilesBlockPi(
 		args.state,
@@ -2043,15 +2067,20 @@ function softRefreshCachedM1Pi(args: {
 				args.db,
 				args.state.sessionId,
 			);
-			return {
-				...applyCachedPiRow({
-					row: sibling,
-					state: args.state,
-					compartmentsForNormalization: siblingCompartments,
-				}),
-				memoryUpdateCount: 0,
-				recomputed: false,
-			};
+		return {
+			...applyCachedPiRow({
+				row: sibling,
+				state: args.state,
+				compartmentsForNormalization: siblingCompartments,
+			}),
+			memoryUpdateCount: 0,
+			recomputed: false,
+			// Sibling-adoption replay: the bytes are persisted, not freshly
+			// rendered. The external delta is unknown from the persisted row;
+			// use "" so the pressure backstop (which only fires on recomputed
+			// bytes) is never triggered by a replayed sibling m[1].
+			externalDeltaText: "",
+		};
 		}
 
 		const markers = markersFromCachedPiRow(
@@ -2103,6 +2132,7 @@ function softRefreshCachedM1Pi(args: {
 			markers: { ...markers, lastBaselineEndMessageId: advancedBoundary },
 			memoryUpdateCount: rendered.memoryUpdateCount,
 			recomputed: true,
+			externalDeltaText: rendered.externalDeltaText,
 		};
 	} catch (error) {
 		try {
@@ -2164,6 +2194,10 @@ export function injectM0M1Pi(
 	let memoryUpdateCount = 0;
 	let m1Recomputed = false;
 	let freshFallbackRenderedMemoryIds: number[] | null = null;
+	// Tracks the external-recall delta text from the freshly rendered m[1] so
+	// the pressure backstop can subtract its tokens — recall must NEVER cause a
+	// fold (parity with OpenCode injectM0M1 externalDeltaText subtraction).
+	let m1ExternalDeltaText = "";
 
 	if (decision.value) {
 		// On contention exhaustion, reuse the cached m[0]/m[1] pair rather than
@@ -2259,6 +2293,7 @@ export function injectM0M1Pi(
 		m1 = freshM1.text;
 		memoryUpdateCount = freshM1.memoryUpdateCount;
 		m1Recomputed = true;
+		m1ExternalDeltaText = freshM1.externalDeltaText;
 	} else if (contentionExhausted) {
 		// m[1] was replayed with the cached m[0] pair above.
 	} else if (recomputeM1ThisPass) {
@@ -2274,6 +2309,7 @@ export function injectM0M1Pi(
 		markers = refreshed.markers;
 		memoryUpdateCount = refreshed.memoryUpdateCount;
 		m1Recomputed = refreshed.recomputed;
+		m1ExternalDeltaText = refreshed.externalDeltaText;
 	} else {
 		const replayed = replayCachedM1Pi(db, state, currentCompartments);
 		m0 = replayed.m0;
@@ -2294,6 +2330,15 @@ export function injectM0M1Pi(
 	// Token counts (NOT char lengths) on both sides of the ratio — parity with
 	// OpenCode. The documented intent is "m[1] exceeds ~15% of m[0] tokens";
 	// char length diverges from token count on XML-heavy / non-Latin content.
+	//
+	// External recall content must NEVER CAUSE a fold (spec: not a bust trigger);
+	// it rides along when a fold fires for other reasons. Two layers of
+	// subtraction from m1Tokens: the delta itself (late recall) AND a small
+	// wrapper overhead (every m[1] carries the wrapper, empty or not — not a
+	// drift signal). The wrapper tokens are also subtracted from the absolute
+	// cap budget for symmetry, so a tiny m[0] baseline (where the wrapper
+	// alone would exceed the cap) does not falsely fire a refold when the
+	// only m[1] content is the recall delta. (Parity with OpenCode injectM0M1.)
 	const M0_DRIFT_RATIO_FLOOR_TOKENS = 500;
 	const M1_DRIFT_RATIO = 0.15;
 	const M1_ABSOLUTE_CAP_RATIO = 0.2;
@@ -2302,8 +2347,21 @@ export function injectM0M1Pi(
 		M1_ABSOLUTE_CAP_RATIO;
 	const m1HasContent = m1 !== PI_M1_PLACEHOLDER;
 	const m1Tokens = m1HasContent ? estimateTokens(m1) : 0;
+	const M1_PRESSURE_WRAPPER_TOKENS = 20;
+	const externalDeltaTokens = m1ExternalDeltaText
+		? estimateTokens(m1ExternalDeltaText)
+		: 0;
+	const m1PressureTokens = Math.max(
+		0,
+		m1Tokens - externalDeltaTokens - M1_PRESSURE_WRAPPER_TOKENS,
+	);
+	const m1AbsoluteContentBudget = Math.max(
+		0,
+		m1AbsoluteBudget - M1_PRESSURE_WRAPPER_TOKENS,
+	);
 	const m0Tokens = estimateTokens(m0);
-	const m1OverAbsoluteCap = m1HasContent && m1Tokens > m1AbsoluteBudget;
+	const m1OverAbsoluteCap =
+		m1HasContent && m1PressureTokens > m1AbsoluteContentBudget;
 	if (
 		!materialized &&
 		!contentionExhausted &&
@@ -2313,7 +2371,7 @@ export function injectM0M1Pi(
 			m1OverAbsoluteCap ||
 			(m1HasContent &&
 				m0Tokens >= M0_DRIFT_RATIO_FLOOR_TOKENS &&
-				m1Tokens > m0Tokens * M1_DRIFT_RATIO))
+				m1PressureTokens > m0Tokens * M1_DRIFT_RATIO))
 	) {
 		decision = { value: true, reason: "drift" };
 		try {
