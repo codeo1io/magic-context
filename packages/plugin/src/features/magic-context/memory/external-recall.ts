@@ -247,7 +247,16 @@ async function dedupAndTrim(
                 recalledVectors[i] = recalledResult.vectors[i] ?? null;
             }
             const stored = getProjectEmbeddings(db, projectIdentity);
-            localVectors = [...stored.values()];
+            // Honor the model guard: only compare against local vectors that were
+            // embedded with the same model as the recalled items. Mismatched
+            // vectors (different dimensionality or space) produce meaningless
+            // cosine scores and must be excluded.
+            const queryModelId = recalledResult.modelId;
+            localVectors = [...stored.values()]
+                .filter(
+                    (e) => !queryModelId || queryModelId === "off" || e.modelId === queryModelId,
+                )
+                .map((e) => e.embedding);
             if (userContents.length > 0) {
                 const userResult = await embedBatchForProject(projectIdentity, userContents);
                 if (userResult) {

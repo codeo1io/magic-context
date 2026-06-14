@@ -11,7 +11,6 @@ import type { Scheduler } from "../../features/magic-context/scheduler";
 import { parseCacheTtl } from "../../features/magic-context/scheduler";
 import { recordSessionProjectIdentity } from "../../features/magic-context/session-project-storage";
 
-
 import {
     type ContextDatabase,
     deriveTagLoadFloor,
@@ -1621,9 +1620,6 @@ export function createTransform(deps: TransformDeps) {
             : rebuiltHistoryFromInitialPrepare || compartmentPhase.rebuiltHistoryThisPass;
 
         const tPostProcess = performance.now();
-<<<<<<< HEAD
-        const postTransformResult = await runPostTransformPhase({
-=======
         // External memory v2 hybrid A-path: when the FIRST m[0] render is
         // imminent (no cached baseline — the provider cache is already cold),
         // give the in-flight recall up to recall.timeout_ms to land so the
@@ -1636,8 +1632,7 @@ export function createTransform(deps: TransformDeps) {
                 hasCachedM0: sessionMeta.cachedM0Bytes !== null,
             });
         }
-        await runPostTransformPhase({
->>>>>>> e29b3f4f (feat(memory): session-start external recall — frozen snapshot, cache-safe m[0]/m[1] injection)
+        const postTransformResult = await runPostTransformPhase({
             sessionId,
             db,
             messages,
