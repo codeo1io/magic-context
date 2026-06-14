@@ -41,9 +41,7 @@ import {
 	renewCompartmentLease,
 } from "@magic-context/core/features/magic-context/compartment-lease";
 import { getCompartments } from "@magic-context/core/features/magic-context/compartment-storage";
-import {
-	getExternalRecallConfig,
-} from "@magic-context/core/features/magic-context/memory/external-memory";
+import { getExternalRecallConfig } from "@magic-context/core/features/magic-context/memory/external-memory";
 import {
 	maybeAwaitExternalRecall,
 	startSessionRecall,
@@ -1482,60 +1480,62 @@ export function registerPiContextHandler(
 			// counter persists across plugin restarts via the
 			// `session_meta.counter` column.
 			tagger.initFromDb(sessionId, options.db);
-		const isFirstContextPassForSession =
-			!firstContextPassSeenBySession.has(sessionId);
-		firstContextPassSeenBySession.add(sessionId);
+			const isFirstContextPassForSession =
+				!firstContextPassSeenBySession.has(sessionId);
+			firstContextPassSeenBySession.add(sessionId);
 
-		// Fire external-memory session recall on the first pass. Mirrors
-		// OpenCode transform.ts `startSessionRecall` (fires once per session
-		// when `!loadedSessions.has(sessionId)`). The recall is async and
-		// bounded by recall.timeout_ms; `maybeAwaitExternalRecall` below
-		// waits for it only when the first m[0] materialization is imminent.
-		if (isFirstContextPassForSession) {
-			const firstUserPrompt = getExternalRecallConfig()?.global_from_prompt
-				? (() => {
-						// Extract the first meaningful user message text for the
-						// global recall query enrichment (recall.global_from_prompt).
-						// Mirrors OpenCode's extractFirstUserPromptText.
-						const msgs = event.messages as Array<{
-							role?: string;
-							content?: unknown;
-						}>;
-						for (const msg of msgs) {
-							if (msg.role !== "user") continue;
-							const text =
-								typeof msg.content === "string"
-									? msg.content
-									: Array.isArray(msg.content)
+			// Fire external-memory session recall on the first pass. Mirrors
+			// OpenCode transform.ts `startSessionRecall` (fires once per session
+			// when `!loadedSessions.has(sessionId)`). The recall is async and
+			// bounded by recall.timeout_ms; `maybeAwaitExternalRecall` below
+			// waits for it only when the first m[0] materialization is imminent.
+			if (isFirstContextPassForSession) {
+				const firstUserPrompt = getExternalRecallConfig()?.global_from_prompt
+					? (() => {
+							// Extract the first meaningful user message text for the
+							// global recall query enrichment (recall.global_from_prompt).
+							// Mirrors OpenCode's extractFirstUserPromptText.
+							const msgs = event.messages as Array<{
+								role?: string;
+								content?: unknown;
+							}>;
+							for (const msg of msgs) {
+								if (msg.role !== "user") continue;
+								const text =
+									typeof msg.content === "string"
 										? msg.content
-												.filter(
-													(p): p is { type: string; text: string } =>
-														p !== null &&
-														typeof p === "object" &&
-														(p as { type?: unknown }).type === "text" &&
-														typeof (p as { text?: unknown }).text === "string",
-												)
-												.map((p) => p.text)
-												.join(" ")
-										: "";
-							const trimmed = text.trim();
-							if (trimmed.length > 0) return trimmed;
-						}
-						return undefined;
-					})()
-				: undefined;
-			startSessionRecall({
-				db: options.db,
-				sessionId,
-				projectIdentity,
-				projectName: projectDirectory
-					? projectDirectory.split("/").filter(Boolean).at(-1) ?? projectIdentity
-					: projectIdentity,
-				...(firstUserPrompt ? { firstUserPrompt } : {}),
-			});
-		}
+										: Array.isArray(msg.content)
+											? msg.content
+													.filter(
+														(p): p is { type: string; text: string } =>
+															p !== null &&
+															typeof p === "object" &&
+															(p as { type?: unknown }).type === "text" &&
+															typeof (p as { text?: unknown }).text ===
+																"string",
+													)
+													.map((p) => p.text)
+													.join(" ")
+											: "";
+								const trimmed = text.trim();
+								if (trimmed.length > 0) return trimmed;
+							}
+							return undefined;
+						})()
+					: undefined;
+				startSessionRecall({
+					db: options.db,
+					sessionId,
+					projectIdentity,
+					projectName: projectDirectory
+						? (projectDirectory.split("/").filter(Boolean).at(-1) ??
+							projectIdentity)
+						: projectIdentity,
+					...(firstUserPrompt ? { firstUserPrompt } : {}),
+				});
+			}
 
-		const piUsage = ctx.getContextUsage?.();
+			const piUsage = ctx.getContextUsage?.();
 			const tModelDetect = performance.now();
 			// Seed the in-memory model key from the JSONL on the first pass after a
 			// (re)start. liveModelBySession is volatile, so without this a model
