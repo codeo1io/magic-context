@@ -1578,3 +1578,53 @@ describe("Pi external m[1] delta pressure-refold exclusion (cache parity)", () =
 		}
 	});
 });
+
+describe("Pi external m[1] delta includes profile slice (Finding #2)", () => {
+	// Regression: Pi's m[1] delta previously called renderExternalMemoryBlock
+	// (project+global only), dropping profile-slice items. The fix uses
+	// renderExternalMemoryDelta (project+global+profile), matching OpenCode.
+
+	it("profile-slice item from recall snapshot appears in Pi m[1] external delta", () => {
+		const db = createTestDb();
+		const cwd = mkdtempSync(join(tmpdir(), "pi-ext-profile-delta-"));
+		try {
+			const state = piState("ses-pi-ext-profile", cwd);
+
+			// Materialize m[0] first (no external recall yet).
+			const firstPass = [userMessage("hello", 10)];
+			const r0 = injectM0M1Pi(state, db, firstPass as never, [], true);
+			expect(r0.m0Materialized).toBe(true);
+
+			// Seed an external recall snapshot with a profile-slice item AFTER
+			// m[0] was materialized. The snapshot hash differs from the m[0]
+			// baseline hash (which is ""), so the delta will be rendered into m[1].
+			const profileItem = "user prefers concise answers";
+			db.prepare(
+				"UPDATE session_meta SET external_recall_state = ?, external_recall_json = ?, external_recall_at = ? WHERE session_id = ?",
+			).run(
+				"done",
+				JSON.stringify({
+					project: [],
+					profile: [{ content: profileItem }],
+					global: [],
+				}),
+				Date.now(),
+				state.sessionId,
+			);
+
+			// Cache-busting pass: the external delta must include the profile item.
+			const secondPass = [userMessage("hello", 11)];
+			injectM0M1Pi(state, db, secondPass as never, [], true);
+
+			// m[1] must contain the profile-slice item.
+			const m1Text = textOf(secondPass[1] as never);
+			expect(m1Text).toContain(profileItem);
+			// m[0] must NOT contain it (profile merges into <user-profile> at next
+			// HARD fold, not into the external block at m[0]).
+			expect(textOf(secondPass[0] as never)).not.toContain(profileItem);
+		} finally {
+			rmSync(cwd, { recursive: true, force: true });
+			closeQuietly(db);
+		}
+	});
+});
