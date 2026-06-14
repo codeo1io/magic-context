@@ -1273,7 +1273,12 @@ export async function unifiedSearch(
             : Promise.resolve([] as ExternalSearchResult[]),
     ]);
 
-    const results = [...memoryResults, ...messageLikeResults, ...gitCommitResults, ...externalResults]
+    const results = [
+        ...memoryResults,
+        ...messageLikeResults,
+        ...gitCommitResults,
+        ...externalResults,
+    ]
         .sort(compareUnifiedResults)
         .slice(0, limit);
 

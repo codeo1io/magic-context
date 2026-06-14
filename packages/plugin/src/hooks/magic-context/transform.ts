@@ -11,7 +11,6 @@ import type { Scheduler } from "../../features/magic-context/scheduler";
 import { parseCacheTtl } from "../../features/magic-context/scheduler";
 import { recordSessionProjectIdentity } from "../../features/magic-context/session-project-storage";
 
-
 import {
     type ContextDatabase,
     getActiveTagsBySession,

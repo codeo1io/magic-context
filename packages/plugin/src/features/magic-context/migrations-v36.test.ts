@@ -29,13 +29,13 @@ describe("migration v36 — session project ownership", () => {
                 expect.arrayContaining(["session_id", "harness", "project_path", "updated_at"]),
             );
             expect(indexNames(db)).toContain("idx_session_projects_project");
-            expect(LATEST_SUPPORTED_VERSION).toBe(36);
-            expect(LATEST_MIGRATION_VERSION).toBe(36);
+            expect(LATEST_SUPPORTED_VERSION).toBe(37);
+            expect(LATEST_MIGRATION_VERSION).toBe(37);
             expect(
                 db
                     .prepare("SELECT version FROM schema_migrations ORDER BY version DESC LIMIT 1")
                     .get(),
-            ).toEqual({ version: 36 });
+            ).toEqual({ version: 37 });
         } finally {
             closeQuietly(db);
         }
@@ -58,7 +58,7 @@ describe("migration v36 — session project ownership", () => {
                 db
                     .prepare("SELECT version FROM schema_migrations ORDER BY version DESC LIMIT 1")
                     .get(),
-            ).toEqual({ version: 36 });
+            ).toEqual({ version: 37 });
         } finally {
             closeQuietly(db);
         }
