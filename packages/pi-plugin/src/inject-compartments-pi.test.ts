@@ -1562,7 +1562,13 @@ describe("Pi external m[1] delta pressure-refold exclusion (cache parity)", () =
 			// Cache-busting pass: recomputeM1ThisPass=true. The external delta
 			// will be rendered into m[1]. The pressure backstop must NOT fire.
 			const secondPass = [userMessage("hello", 11)];
-			const r1 = injectM0M1Pi(state, db, secondPass as never, ["entry-0"], true);
+			const r1 = injectM0M1Pi(
+				state,
+				db,
+				secondPass as never,
+				["entry-0"],
+				true,
+			);
 
 			// (a) m[0] NOT re-materialized — external delta must not trigger refold.
 			expect(r1.m0Materialized).toBe(false);
