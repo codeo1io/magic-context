@@ -25,7 +25,7 @@ import { computeRecallSnapshotHash, readExternalRecallSnapshot } from "./externa
 const mockEmbedBatch = mock(async () => null);
 const mockLog = mock(() => {});
 
-mock.module("../../project-embedding-registry", () => ({
+mock.module("../project-embedding-registry", () => ({
     embedBatchForProject: mockEmbedBatch,
     getProjectEmbeddingSnapshot: () => null,
 }));
@@ -37,6 +37,7 @@ mock.module("../../../shared/logger", () => ({
 }));
 
 const { insertMemory } = await import("./storage-memory");
+const { saveEmbedding } = await import("./storage-memory-embeddings");
 
 let db: Database | null = null;
 
@@ -428,57 +429,85 @@ describe("embedding model-guard (regression: cross-model cosine dedup)", () => {
         expect(snapshot?.project).toEqual([{ content: "unique recalled fact" }]);
     });
 
-    test("model-guard: unknown/off query model → localVectors empty → no cosine dedup", () => {
-        // Unit-level test of the fixed filter expression.
-        // Simulate stored embeddings from two different model IDs.
-        const storedEmbeddings = new Map([
-            [1, { embedding: new Float32Array([1, 0]), modelId: "model-A" }],
-            [2, { embedding: new Float32Array([0, 1]), modelId: "model-B" }],
-        ]);
+    test("model-guard: unknown/off query model → localVectors empty → no cosine dedup (real dedupAndTrim)", async () => {
+        // RED-GREEN regression: the old filter
+        //   !queryModelId || queryModelId === "off" || e.modelId === queryModelId
+        // included ALL stored vectors when queryModelId was "off", producing
+        // meaningless cosine scores. The fix uses an empty localVectors when the
+        // query model is unknown/off.
+        //
+        // Setup: a local memory with a stored embedding (model-A, vector [1, 0]).
+        // The recalled item has different text (not a hash-dup) but the same
+        // direction vector. mockEmbedBatch returns modelId="off" for the recalled
+        // items, so the model guard must suppress cosine dedup entirely.
+        //
+        // OLD BUG: localVectors = [model-A vector] → cosine sim = 1.0 ≥ 0.85 →
+        //   recalled item dropped → snapshot.project = [] → test FAILS.
+        // FIX: localVectors = [] → no cosine dedup → item survives → PASSES.
+        const localMemory = insertMemory(db!, {
+            projectPath: ARGS.projectIdentity,
+            category: "ARCHITECTURE",
+            content: "local memory content",
+            sourceType: "historian",
+        });
+        // Store a model-A embedding for the local memory.
+        saveEmbedding(db!, localMemory.id, new Float32Array([1, 0]), "model-A");
+        resetEmbeddingCacheForTests();
 
-        // When queryModelId is "off", the fixed filter must produce an empty array.
-        const queryModelIdOff = "off";
-        const localVectorsOff =
-            queryModelIdOff && queryModelIdOff !== "off"
-                ? [...storedEmbeddings.values()]
-                      .filter((e) => e.modelId === queryModelIdOff)
-                      .map((e) => e.embedding)
-                : [];
-        expect(localVectorsOff).toHaveLength(0);
+        // mockEmbedBatch returns modelId="off" — unknown model, cosine dedup must
+        // be suppressed regardless of vector similarity.
+        mockEmbedBatch.mockImplementation(async () => ({
+            vectors: [new Float32Array([1, 0])], // same direction as local — would be a cosine dup
+            modelId: "off",
+        }));
 
-        // When queryModelId is falsy (empty string), same result.
-        const queryModelIdEmpty = "";
-        const localVectorsEmpty =
-            queryModelIdEmpty && queryModelIdEmpty !== "off"
-                ? [...storedEmbeddings.values()]
-                      .filter((e) => e.modelId === queryModelIdEmpty)
-                      .map((e) => e.embedding)
-                : [];
-        expect(localVectorsEmpty).toHaveLength(0);
+        _setTestExternalBackendFactory(() =>
+            recallBackend({
+                project: [{ content: "recalled item with different text" }],
+            }),
+        );
+        initializeExternalMemory(HINDSIGHT_TEST_CONFIG);
+        startSessionRecall({ db: db!, ...ARGS });
+        await waitForSessionRecall(ARGS.sessionId, 5000);
+        const snapshot = readExternalRecallSnapshot(db!, ARGS.sessionId).snapshot;
+        // Item must survive: modelId="off" → localVectors empty → no cosine dedup.
+        expect(snapshot?.project).toEqual([{ content: "recalled item with different text" }]);
     });
 
-    test("model-guard: known query model → only same-model stored vectors participate; different-model excluded", () => {
-        // Unit-level test of the fixed filter expression.
-        // Simulate stored embeddings from two different model IDs.
-        const storedEmbeddings = new Map([
-            [1, { embedding: new Float32Array([1, 0]), modelId: "model-A" }],
-            [2, { embedding: new Float32Array([0, 1]), modelId: "model-B" }],
-        ]);
+    test("model-guard: known query model → same-model stored vectors participate; near-dup dropped (real dedupAndTrim)", async () => {
+        // Complement of the test above: when the query model IS known and matches
+        // the stored embedding model, cosine dedup fires and drops near-duplicates.
+        //
+        // Setup: same local memory + model-A embedding. mockEmbedBatch returns
+        // modelId="model-A" for the recalled item (same model as stored).
+        //
+        // FIX: localVectors = [model-A vector] → cosine sim = 1.0 ≥ 0.85 →
+        //   recalled item dropped → snapshot.project = [] → PASSES.
+        const localMemory = insertMemory(db!, {
+            projectPath: ARGS.projectIdentity,
+            category: "ARCHITECTURE",
+            content: "local memory content",
+            sourceType: "historian",
+        });
+        saveEmbedding(db!, localMemory.id, new Float32Array([1, 0]), "model-A");
+        resetEmbeddingCacheForTests();
 
-        // When queryModelId is "model-A", only model-A vectors are included.
-        const queryModelId = "model-A";
-        const localVectors =
-            queryModelId && queryModelId !== "off"
-                ? [...storedEmbeddings.values()]
-                      .filter((e) => e.modelId === queryModelId)
-                      .map((e) => e.embedding)
-                : [];
-        expect(localVectors).toHaveLength(1);
-        expect(localVectors[0]).toEqual(new Float32Array([1, 0]));
+        mockEmbedBatch.mockImplementation(async () => ({
+            vectors: [new Float32Array([1, 0])], // cosine sim = 1.0 with local
+            modelId: "model-A",
+        }));
 
-        // model-B vector is excluded — different embedding space.
-        const modelBPresent = localVectors.some((v) => v[0] === 0 && v[1] === 1);
-        expect(modelBPresent).toBe(false);
+        _setTestExternalBackendFactory(() =>
+            recallBackend({
+                project: [{ content: "recalled item with different text" }],
+            }),
+        );
+        initializeExternalMemory(HINDSIGHT_TEST_CONFIG);
+        startSessionRecall({ db: db!, ...ARGS });
+        await waitForSessionRecall(ARGS.sessionId, 5000);
+        const snapshot = readExternalRecallSnapshot(db!, ARGS.sessionId).snapshot;
+        // Item must be dropped: model-A matches → cosine sim = 1.0 ≥ 0.85 → dedup.
+        expect(snapshot?.project).toEqual([]);
     });
 });
 

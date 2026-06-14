@@ -2067,20 +2067,20 @@ function softRefreshCachedM1Pi(args: {
 				args.db,
 				args.state.sessionId,
 			);
-		return {
-			...applyCachedPiRow({
-				row: sibling,
-				state: args.state,
-				compartmentsForNormalization: siblingCompartments,
-			}),
-			memoryUpdateCount: 0,
-			recomputed: false,
-			// Sibling-adoption replay: the bytes are persisted, not freshly
-			// rendered. The external delta is unknown from the persisted row;
-			// use "" so the pressure backstop (which only fires on recomputed
-			// bytes) is never triggered by a replayed sibling m[1].
-			externalDeltaText: "",
-		};
+			return {
+				...applyCachedPiRow({
+					row: sibling,
+					state: args.state,
+					compartmentsForNormalization: siblingCompartments,
+				}),
+				memoryUpdateCount: 0,
+				recomputed: false,
+				// Sibling-adoption replay: the bytes are persisted, not freshly
+				// rendered. The external delta is unknown from the persisted row;
+				// use "" so the pressure backstop (which only fires on recomputed
+				// bytes) is never triggered by a replayed sibling m[1].
+				externalDeltaText: "",
+			};
 		}
 
 		const markers = markersFromCachedPiRow(
