@@ -420,6 +420,69 @@ Cross-session memory settings. All memories are scoped to the current project (i
 | `injection_budget_tokens` | `number` (500–20000) | `4000` | Token budget for memory injection into `<session-history>`. |
 | `auto_promote` | `boolean` | `true` | Promote eligible session facts to project memories automatically after historian or `/ctx-recomp` runs. When `false`, historian and recomp do not write any new memories — agents can still create memories explicitly via `ctx_memory write`, and existing memories continue to be injected and searched normally. |
 | `retrieval_count_promotion_threshold` | `number` | `3` | Retrievals needed before a memory is auto-promoted to permanent. |
+| `external` | `object` | See below | **User-config-only.** Long-term memory backend (Hindsight) — tees curated writes OUT and recalls them BACK once per session, plus an explicit-only `ctx_search` source. A cloned repo cannot redirect the endpoint or read a user's personal memory store. |
+
+### `memory.external`
+
+The `memory.external` block controls the **external memory backend** (Hindsight): a long-term companion store that holds curated memories OUT of the project (so they survive across projects, harness restarts, and (in future) the user's whole fleet) and recalls them BACK once per session. The local SQLite store remains the source of truth; the external store is a long-term companion.
+
+**Security:** this entire block is **user-config-only**. `stripUnsafeProjectConfigFields()` in `src/config/project-security.ts` drops it from project-level config (parallel to `auto_update` and `sqlite`) — a cloned repo cannot redirect the endpoint, exfiltrate a user's personal memory store, or read a user's external memory by editing `magic-context.jsonc` in a project root. Set the block in `~/.config/opencode/magic-context.jsonc` (OpenCode) or `~/.pi/agent/magic-context.jsonc` (Pi).
+
+```jsonc
+{
+  "memory": {
+    "external": {
+      "provider": "off",                                    // "off" (default) or "hindsight"
+      "endpoint": "http://10.0.0.1:8889",                    // required when provider is hindsight; Hindsight base URL
+      "api_key": "{env:HINDSIGHT_API_KEY}",                  // optional bearer token
+      "project_bank": "mc-{name}-{id8}",                     // project bank name template; {name}=project basename, {id8}=first 8 chars of the project identity hash
+      "main_bank": "user-memories",                          // required when provider is hindsight; bank for user + global scope. Assumed to pre-exist; never created or modified by the plugin
+      "retain_sources": ["historian", "agent", "dreamer"],   // which creation points tee (gate write-side, not read-side)
+      "tags": [],                                            // static tags attached to every retained item
+      "recall": {                                            // see `memory.external.recall` below
+        "enabled": true,
+        "timeout_ms": 3000,
+        "max_tokens": 2048,
+        "dedup_threshold": 0.85,
+        "global_tags": [],
+        "global_from_prompt": false,
+        "search": true,
+        "mental_models": true,
+        "profile_mental_models": ["user-preferences"]
+      }
+    }
+  }
+}
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `provider` | `"hindsight"` \| `"off"` | `"off"` | Backend implementation. `"off"` disables the whole feature. `"hindsight"` activates tee-on-write + once-per-session recall + the explicit `ctx_search` source. |
+| `endpoint` | `string` | — | Required when `provider: "hindsight"`. Hindsight base URL (e.g. `http://10.0.0.1:8889`). Trailing slashes are stripped. SSRF-guarded. |
+| `api_key` | `string` | — | Optional bearer token. Supports `{env:VAR}` substitution. Never logged. |
+| `project_bank` | `string` (template) | `"mc-{name}-{id8}"` | Project-bank name template. Placeholders: `{name}` = sanitized project basename, `{id8}` = first 8 chars of the project identity hash. Created on first retain (PUT with the project bank mission). |
+| `main_bank` | `string` | — | Required when `provider: "hindsight"`. Bank for `user` and `global` scope items. **Assumed to pre-exist; the plugin never creates or modifies it.** |
+| `retain_sources` | `string[]` | `["historian","agent","dreamer"]` | Which creation points tee to the external backend. `historian` = fact promotion in `src/features/magic-context/memory/promotion.ts`. `agent` = `ctx_memory` `write` / `update` in `src/tools/ctx-memory/tools.ts`. `dreamer` = user-memory promotion in `src/features/magic-context/user-memory/review-user-memories.ts`. Read paths (recall, search, mental-models) and W2 correctives (archive/update/verify corrective propagation) are NOT gated by this list. |
+| `tags` | `string[]` | `[]` | Static tags attached to every retained item (in addition to the always-present `source:magic-context`, `category:<X>`, and the per-scope `project:<id>` / `scope:user` / `scope:global` tags). |
+| `recall` | `object` | See below | Unified read path — session-start recall + `ctx_search` external source. |
+
+### `memory.external.recall`
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `enabled` | `boolean` | `true` | Session-start recall from the external backend, merged into the context injection. Late results ride the m[1] `<external-memory>` delta; the first m[0] render awaits up to `timeout_ms` (cache-cold path). |
+| `timeout_ms` | `number` (500–15000) | `3000` | Max wait for recall at the first render of a session (when the cache is already cold). Late results arrive as an m[1] delta on later passes. |
+| `max_tokens` | `number` (256–8192) | `2048` | Per-slice token budget — project / profile / global each get this cap. The external block is NOT charged to the history or local-memory budget; it is bounded solely by this × 3 slices. |
+| `dedup_threshold` | `number` (0.5–0.99) | `0.85` | Cosine similarity above which a recalled item is dropped as a duplicate of a local memory (or active user memory). Hash-only fallback when embeddings are unavailable. |
+| `global_tags` | `string[]` | `[]` | Tag filter for the global (main-bank) recall slice, matched with `tags_match: "any"` (untagged content INCLUDED). `[]` = no filter sent (full autoRecall replacement). |
+| `global_from_prompt` | `boolean` | `false` | Include an excerpt of the session's first user prompt in the global-slice recall query (the project name is always included). The first prompt is fixed for the session, so the query — and the frozen recall snapshot — stays deterministic across crash-recovery re-fires. |
+| `search` | `boolean` | `true` | Expose the `ctx_search` `"external"` source (project + main bank). **Explicit-only** — the auto-search hot path (every user prompt hint) NEVER hits it, even when this is `true`. |
+| `mental_models` | `boolean` | `true` | Use Hindsight mental models as the fast path for the project and profile recall slices (single GET, server-refreshed), falling back to full recall when absent/empty. The global slice always uses full recall. |
+| `profile_mental_models` | `string[]` | `["user-preferences"]` | Main-bank mental-model names (case-insensitive) used for the profile slice. The main bank is never modified by the plugin — create these manually. Project-bank mental models are seeded by the plugin (`project-conventions`, `project-decisions`) on the first successful retain. |
+
+**Engine-agnostic interface.** `external-memory-provider.ts` defines a neutral `ExternalMemoryBackend` interface (mirrors the `EmbeddingProvider` pattern). Hindsight is the only shipped implementation today. Document identity is `mc:<scopeKey>:<category>:<hash>` (content-derived → idempotent re-retains upsert on the server; retries never duplicate). Bank routing: `scope: "project"` → `project_bank` (per project); `scope: "user"` and `scope: "global"` → `main_bank`. Project items carry `project:<id>` + `project-name:<basename>` tags; globals carry `scope:global` plus `origin-project:*` provenance tags and a `context` field that names the originating project so Hindsight's fact extractor links it as an entity.
+
+**Failure semantics.** Hindsight calls are fire-and-forget; failures are logged, never thrown. The impl carries a circuit breaker (3 fails in 60s → open 5min → half-open probe) so a hung endpoint can't drag every plugin operation through its timeout. A 422 (memory-defense rejected content) is treated as a hard no and never retried; 404 on a missing bank is benign (returns empty for the slice). The bearer token is never logged. Cross-harness: OpenCode and Pi share the same banks (the impl is a single, neutral interface and the project bank name is project-derived, so both harnesses resolve the same bank).
 
 ---
 
@@ -653,7 +716,13 @@ Tier boundaries are hardcoded to keep behavior predictable and prevent cache-bus
     "injection_budget_tokens": 4000,
     "auto_promote": true,
     "auto_search": { "enabled": true, "score_threshold": 0.6, "min_prompt_chars": 20 },
-    "git_commit_indexing": { "enabled": false, "since_days": 365, "max_commits": 2000 }
+    "git_commit_indexing": { "enabled": false, "since_days": 365, "max_commits": 2000 },
+    "external": {                                              // USER-LEVEL ONLY — stripped from project config
+      "provider": "hindsight",
+      "endpoint": "http://10.0.0.1:8889",
+      "api_key": "{env:HINDSIGHT_API_KEY}",
+      "main_bank": "user-memories"
+    }
   },
 
   "sidekick": {
