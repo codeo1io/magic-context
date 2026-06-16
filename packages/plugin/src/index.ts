@@ -28,6 +28,7 @@ import {
     HISTORIAN_EDITOR_SYSTEM_PROMPT,
 } from "./hooks/magic-context/compartment-prompt";
 import { createLiveSessionState } from "./hooks/magic-context/live-session-state";
+import { injectSkillIntentParam } from "./hooks/magic-context/skill-tool-definition";
 import { cleanupConflictWarnings, sendConflictWarning } from "./plugin/conflict-warning-hook";
 import { startDreamScheduleTimer } from "./plugin/dream-timer";
 import { ensureProjectRegisteredFromOpenCodeDirectory } from "./plugin/embedding-bootstrap";
@@ -457,6 +458,11 @@ const plugin: Plugin = async (ctx) => {
                 typedInput.toolID,
                 typeof typedOutput.description === "string" ? typedOutput.description : "",
                 typedOutput.parameters,
+            );
+            // Inject optional intent param for skill-memory recall
+            injectSkillIntentParam(
+                typedInput.toolID,
+                typedOutput as Parameters<typeof injectSkillIntentParam>[1],
             );
         },
         "tool.execute.after": async (input, output) => {
