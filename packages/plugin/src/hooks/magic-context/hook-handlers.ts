@@ -1,8 +1,11 @@
+import { resolveProjectIdentity } from "../../features/magic-context/memory/project-identity";
 import {
     clearSessionTracking,
     scheduleIncrementalIndex,
     scheduleReconciliation,
 } from "../../features/magic-context/message-index-async";
+import type { SkillMemoryConfig } from "../../features/magic-context/skill-memory/frontmatter";
+import { recallSkillMemoryBlock } from "../../features/magic-context/skill-memory/recall";
 import { clearPersistedReasoningWatermark } from "../../features/magic-context/storage";
 import {
     getOrCreateSessionMeta,
@@ -22,6 +25,7 @@ import {
 import { clearSidebarSnapshotCache } from "../../plugin/sidebar-snapshot-cache";
 import type { PluginContext } from "../../plugin/types";
 import { sessionLog } from "../../shared/logger";
+import type { Database } from "../../shared/sqlite";
 import { clearAutoSearchForSession } from "./auto-search-runner";
 import {
     buildChannel1Reminder,
@@ -512,6 +516,38 @@ export function getAndDeleteIntent(map: IntentByCallIdMap, callId: string): stri
 
 // ── createToolExecuteBeforeHook ─────────────────────────────────────────────
 
+/**
+ * Append a <skill-memory> block to output.output when:
+ * 1. frontmatterConfig is non-null (skill has skill-memory: enabled: true)
+ * 2. Notes exist for this skill in the DB
+ * 3. output.output is a non-empty string
+ *
+ * Delegates to recallSkillMemoryBlock (feature layer) for the shared recall+format core.
+ * Append ordering: this runs BEFORE maybeInjectChannel1Nudge (skill-memory
+ * content before Channel-1 meta-reminder). See design §2.6.
+ */
+export function maybeInjectSkillMemory(
+    db: Database,
+    skillId: string,
+    tier: "project" | "global",
+    projectIdentity: string,
+    frontmatterConfig: SkillMemoryConfig | null,
+    output: { output?: unknown },
+): void {
+    if (typeof output.output !== "string" || output.output.length === 0) return;
+
+    // Delegate to shared recall core (also used by ctx_skill_recall tool)
+    const block = recallSkillMemoryBlock(db, {
+        skill: skillId,
+        scope: tier,
+        projectIdentity,
+        frontmatterConfig,
+    });
+    if (block) {
+        output.output = `${output.output}\n\n${block}`;
+    }
+}
+
 export function createToolExecuteBeforeHook(args: { intentByCallId: IntentByCallIdMap }) {
     return async (input: unknown, output?: unknown) => {
         const typedInput = input as { tool?: string; callID?: string };
@@ -528,6 +564,12 @@ export function createToolExecuteAfterHook(args: {
     db: Parameters<typeof getOrCreateSessionMeta>[0];
     channel1StateBySession: Map<string, Channel1State>;
     skillLoadRegistry: import("../../features/magic-context/skill-memory/provenance").SkillLoadRegistry;
+    /** Resolved session.directory values, used to compute projectIdentity for
+     *  the skill-memory recall. The hook's transform pass populates this on
+     *  every message turn; on the first skill call before the map is seeded,
+     *  we fall back to `defaultDirectory` (deps.directory). */
+    sessionDirectoryBySession: Map<string, string>;
+    defaultDirectory: string;
 }) {
     return async (input: unknown, output?: unknown) => {
         const typedInput = input as { tool?: string; sessionID?: string; args?: unknown };
@@ -577,6 +619,46 @@ export function createToolExecuteAfterHook(args: {
                         }
                     } catch {
                         // Non-fatal: registry miss means ctx_skill_note will surface an actionable error
+                    }
+
+                    // Skill-memory injection (BEFORE Channel-1 nudge — design §2.6).
+                    // Re-read skillId/args from typedInput; resolve sessionDir to
+                    // projectIdentity; delegate to maybeInjectSkillMemory which
+                    // appends the <skill-memory> block to output.output.
+                    // Non-fatal: recall failure must never block the tool result.
+                    try {
+                        const { registryKey: rKey } = await import(
+                            "../../features/magic-context/skill-memory/provenance"
+                        );
+                        const registryEntry = args.skillLoadRegistry.get(
+                            rKey(typedInput.sessionID, skillId),
+                        );
+                        if (registryEntry) {
+                            // First-turn fallback: if the map has no entry yet
+                            // (skill tool fires before sessionDirectoryBySession
+                            // is populated), fall back to args.defaultDirectory.
+                            // Intentional: multi-project / Desktop-launched sessions
+                            // may misattribute on the very first skill call;
+                            // subsequent calls resolve correctly.
+                            const sessionDir =
+                                args.sessionDirectoryBySession.get(typedInput.sessionID) ??
+                                args.defaultDirectory;
+                            const projectIdentity = resolveProjectIdentity(sessionDir);
+                            maybeInjectSkillMemory(
+                                args.db,
+                                skillId,
+                                registryEntry.tier,
+                                projectIdentity,
+                                registryEntry.frontmatterConfig,
+                                output as { output?: unknown },
+                            );
+                        }
+                    } catch (error) {
+                        sessionLog(
+                            typedInput.sessionID,
+                            "skill-memory injection failed (ignored):",
+                            error,
+                        );
                     }
                 }
             }

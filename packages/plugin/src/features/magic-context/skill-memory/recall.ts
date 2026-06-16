@@ -1,4 +1,5 @@
 import type { Database } from "../../../shared/sqlite";
+import type { SkillMemoryConfig } from "./frontmatter";
 import { getSkillMemoryNotes, type SkillMemoryNote } from "./storage";
 
 export interface FlatRecallOptions {
@@ -97,4 +98,49 @@ function escapeXml(str: string): string {
         .replace(/</g, "&lt;")
         .replace(/>/g, "&gt;")
         .replace(/"/g, "&quot;");
+}
+
+/**
+ * Shared recall core: reads notes from DB, ranks/budgets them, and formats the
+ * <skill-memory> block string. Returns empty string when no notes exist or
+ * skill-memory is not enabled.
+ *
+ * Used by BOTH:
+ *   - maybeInjectSkillMemory (transparent after-hook path) — appends to output.output
+ *   - ctx_skill_recall tool (explicit agent-callable path) — returns as tool result
+ *
+ * Lives in the feature layer (not hook-handlers.ts) to avoid tools→hooks layering.
+ * P2 embeddings benefit both paths automatically when this function is upgraded.
+ */
+export function recallSkillMemoryBlock(
+    db: Database,
+    opts: {
+        skill: string;
+        intent?: string;
+        scope: "project" | "global";
+        projectIdentity: string;
+        frontmatterConfig: SkillMemoryConfig | null;
+        maxTokens?: number;
+    },
+): string {
+    // Guard: skill-memory must be enabled for this skill
+    if (!opts.frontmatterConfig?.enabled) return "";
+
+    try {
+        const maxTokens = opts.maxTokens ?? opts.frontmatterConfig.max_tokens;
+        const notes = flatRecall(db, opts.skill, opts.scope, opts.projectIdentity, {
+            maxTokens,
+            maxPinnedTokens: opts.frontmatterConfig.max_pinned_tokens,
+        });
+        if (notes.length === 0) return ""; // cold-start: no block
+
+        const pinnedCount = notes.filter((n) => n.pinned === 1).length;
+        // P1: always "no-intent" flat recall. P2 will add intent-aware ranking (fts5-fallback rung).
+        // TODO (P2): const mode: "no-intent" | "flat-fts" = opts.intent ? "flat-fts" : "no-intent";
+        const mode: "no-intent" | "flat-fts" = "no-intent";
+        return buildSkillMemoryBlock(opts.skill, mode, notes, pinnedCount);
+    } catch {
+        // Non-fatal: recall failure must never block the tool result
+        return "";
+    }
 }

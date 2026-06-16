@@ -943,6 +943,11 @@ export function createMagicContextHook(deps: MagicContextDeps) {
             db,
             channel1StateBySession,
             skillLoadRegistry,
+            // Resolve session-specific directory from the map populated by the
+            // transform pass; fall back to the hook's own directory (deps.directory)
+            // for the first-turn case where the map isn't seeded yet.
+            sessionDirectoryBySession,
+            defaultDirectory: deps.directory,
         }),
         "tool.execute.before": createToolExecuteBeforeHook({ intentByCallId }),
         // Exposed so index.ts can pass the SAME instance to createCtxSkillNoteTool.
