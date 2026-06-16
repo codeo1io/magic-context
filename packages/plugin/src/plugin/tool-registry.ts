@@ -3,6 +3,7 @@ import type { MagicContextPluginConfig } from "../config";
 import { isDreamerRunnable } from "../config/agent-disable";
 import { DEFAULT_PROTECTED_TAGS } from "../features/magic-context/defaults";
 import { resolveProjectIdentity } from "../features/magic-context/memory/project-identity";
+import type { SkillLoadRegistry } from "../features/magic-context/skill-memory/provenance";
 import {
     getDatabasePersistenceError,
     isDatabasePersisted,
@@ -14,6 +15,7 @@ import { CTX_MEMORY_ACTIONS, createCtxMemoryTools } from "../tools/ctx-memory";
 import { createCtxNoteTools } from "../tools/ctx-note";
 import { createCtxReduceTools } from "../tools/ctx-reduce";
 import { createCtxSearchTools } from "../tools/ctx-search";
+import { CTX_SKILL_NOTE_TOOL_NAME, createCtxSkillNoteTool } from "../tools/ctx-skill-note";
 import { ensureProjectRegisteredFromOpenCodeDirectory } from "./embedding-bootstrap";
 import { normalizeToolArgSchemas } from "./normalize-tool-arg-schemas";
 import type { PluginContext } from "./types";
@@ -21,6 +23,7 @@ import type { PluginContext } from "./types";
 export function createToolRegistry(args: {
     ctx: PluginContext;
     pluginConfig: MagicContextPluginConfig;
+    skillLoadRegistry: SkillLoadRegistry;
 }): Record<string, ToolDefinition> {
     const { ctx, pluginConfig } = args;
 
@@ -92,6 +95,15 @@ export function createToolRegistry(args: {
             // <project-memory> block. Only `list` (bulk enumeration) stays
             // dreamer-only — runtime-gated via toolContext.agent in tools.ts.
             allowedActions: [...CTX_MEMORY_ACTIONS],
+        }),
+        // ctx_skill_note: skill-specific memory tool. Reads the session-scoped
+        // skillLoadRegistry to verify the skill was actually loaded this session
+        // before allowing a note to be written. The fail-loud guard for a missing
+        // registry lives in index.ts (the only place hooks.magicContext is in
+        // scope) so a wiring regression is caught at startup, not at runtime.
+        [CTX_SKILL_NOTE_TOOL_NAME]: createCtxSkillNoteTool({
+            db,
+            skillLoadRegistry: args.skillLoadRegistry,
         }),
     };
 

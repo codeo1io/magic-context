@@ -137,9 +137,23 @@ const plugin: Plugin = async (ctx) => {
         liveSessionState,
     });
 
+    // Fail-loud guard: skillLoadRegistry is required for ctx_skill_note to
+    // verify the skill was loaded this session. If the after-hook wiring
+    // is broken, ctx_skill_note would silently read an empty Map and
+    // every note would return "No recent skill load found" — the exact
+    // opposite of "fail loud". Catch a wiring regression at startup, not
+    // at the first ctx_skill_note call from an agent.
+    if (!hooks.magicContext?.skillLoadRegistry) {
+        throw new Error(
+            "[magic-context] ctx_skill_note registration failed: " +
+                "hooks.magicContext.skillLoadRegistry is missing. " +
+                "Ensure createMagicContextHook() returns skillLoadRegistry in its return object.",
+        );
+    }
     const tools = createToolRegistry({
         ctx,
         pluginConfig,
+        skillLoadRegistry: hooks.magicContext.skillLoadRegistry,
     });
 
     // v22 deferred legacy-memory identity backfill. createSessionHooks() opens
