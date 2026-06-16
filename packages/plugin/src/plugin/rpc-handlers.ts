@@ -5,6 +5,7 @@
 import type { MagicContextConfig } from "../config/schema/magic-context";
 import { resolveProjectIdentity } from "../features/magic-context/memory/project-identity";
 import { getEmbeddingCoverageStatus } from "../features/magic-context/project-embedding-registry";
+import { getSkillMemoryStats } from "../features/magic-context/skill-memory/storage";
 import {
     type ContextDatabase as Database,
     openDatabase,
@@ -535,7 +536,18 @@ export function buildStatusDetail(
         historyBlockTokens: 0,
         compressionBudget: null,
         compressionUsage: null,
+        skillMemory: null,
     };
+
+    // Skill-memory stats — scoped to the session's project identity (the
+    // skill_memory table is partitioned on project_identity). base.projectIdentity
+    // is resolved by buildSidebarSnapshot; we re-use it here to avoid a second
+    // resolveProjectIdentity call. Null identity → null stats (status dialog
+    // hides the section). Single SQL aggregate, sync, safe to call every poll.
+    detail.skillMemory = base.projectIdentity
+        ? getSkillMemoryStats(db, base.projectIdentity)
+        : null;
+
 
     try {
         const meta = db

@@ -6,6 +6,7 @@ import { initializeDatabase } from "../storage-db";
 import {
     bumpHitCount,
     getSkillMemoryNotes,
+    getSkillMemoryStats,
     type InsertSkillMemoryNoteArgs,
     insertSkillMemoryNote,
 } from "./storage";
@@ -126,6 +127,100 @@ describe("skill_memory storage", () => {
             const notes = getSkillMemoryNotes(db, "tdd", "global", "git:abc", 10);
             expect(notes[0].hit_count).toBe(2);
             expect(notes[0].last_used_at).not.toBeNull();
+        } finally {
+            closeQuietly(db);
+        }
+    });
+
+    test("getSkillMemoryStats returns totals scoped to project_identity", () => {
+        const db = makeDb();
+        try {
+            // Seed 3 notes for skill "tdd" under project "git:abc", 1 of them pinned.
+            insertSkillMemoryNote(db, {
+                skillId: "tdd",
+                resolvedPath: "/p",
+                tier: "global",
+                skillSource: "opencode-global",
+                projectIdentity: "git:abc",
+                intent: "i1",
+                kind: "gotcha",
+                delta: "n1",
+                normalizedHash: "stats-h1",
+                createdAt: Date.now(),
+            });
+            insertSkillMemoryNote(db, {
+                skillId: "tdd",
+                resolvedPath: "/p",
+                tier: "global",
+                skillSource: "opencode-global",
+                projectIdentity: "git:abc",
+                intent: "i2",
+                kind: "fix",
+                delta: "n2",
+                normalizedHash: "stats-h2",
+                createdAt: Date.now(),
+            });
+            // pin the second one directly via SQL — there's no pin API in storage yet
+            db.prepare("UPDATE skill_memory SET pinned = 1 WHERE normalized_hash = ?").run(
+                "stats-h2",
+            );
+
+            // Seed 2 notes for a different skill "debugging" under the same project.
+            insertSkillMemoryNote(db, {
+                skillId: "debugging",
+                resolvedPath: "/p2",
+                tier: "global",
+                skillSource: "opencode-global",
+                projectIdentity: "git:abc",
+                intent: "i3",
+                kind: "discovery",
+                delta: "n3",
+                normalizedHash: "stats-h3",
+                createdAt: Date.now(),
+            });
+            insertSkillMemoryNote(db, {
+                skillId: "debugging",
+                resolvedPath: "/p2",
+                tier: "global",
+                skillSource: "opencode-global",
+                projectIdentity: "git:abc",
+                intent: "i4",
+                kind: "workflow",
+                delta: "n4",
+                normalizedHash: "stats-h4",
+                createdAt: Date.now(),
+            });
+
+            // Seed 1 note under a DIFFERENT project — must NOT be counted.
+            insertSkillMemoryNote(db, {
+                skillId: "tdd",
+                resolvedPath: "/p",
+                tier: "global",
+                skillSource: "opencode-global",
+                projectIdentity: "git:other",
+                intent: "i5",
+                kind: "gotcha",
+                delta: "n5",
+                normalizedHash: "stats-h5",
+                createdAt: Date.now(),
+            });
+
+            const stats = getSkillMemoryStats(db, "git:abc");
+            expect(stats.totalNotes).toBe(4);
+            expect(stats.skillsWithNotes).toBe(2);
+            expect(stats.pinnedNotes).toBe(1);
+        } finally {
+            closeQuietly(db);
+        }
+    });
+
+    test("getSkillMemoryStats returns all-zeros when no notes exist for the project", () => {
+        const db = makeDb();
+        try {
+            const stats = getSkillMemoryStats(db, "git:empty");
+            expect(stats.totalNotes).toBe(0);
+            expect(stats.skillsWithNotes).toBe(0);
+            expect(stats.pinnedNotes).toBe(0);
         } finally {
             closeQuietly(db);
         }

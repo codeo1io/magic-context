@@ -158,3 +158,29 @@ export function findExistingNote(
         } | null) ?? null
     );
 }
+
+/**
+ * Aggregate stats for the skill_memory table scoped to a project identity.
+ * Used by the ctx-status / TUI status dialog (mirrors the external-memory
+ * status surface). Sync, single query; safe to call on every status poll.
+ */
+export function getSkillMemoryStats(
+    db: Database,
+    projectIdentity: string,
+): { totalNotes: number; skillsWithNotes: number; pinnedNotes: number } {
+    const row = db
+        .prepare(
+            `SELECT
+                COUNT(*) AS total,
+                COUNT(DISTINCT skill_id) AS skills,
+                COALESCE(SUM(CASE WHEN pinned = 1 THEN 1 ELSE 0 END), 0) AS pinned
+             FROM skill_memory
+             WHERE project_identity = ?`,
+        )
+        .get(projectIdentity) as { total: number; skills: number; pinned: number } | undefined;
+    return {
+        totalNotes: Number(row?.total ?? 0),
+        skillsWithNotes: Number(row?.skills ?? 0),
+        pinnedNotes: Number(row?.pinned ?? 0),
+    };
+}
