@@ -180,7 +180,7 @@ Because it runs during idle time, the dreamer pairs well with local models, even
 
 *The right memory at the right moment.* Every turn, active project memories and the compacted session history are injected automatically and cache-stably. On demand, the agent reaches for:
 
-- **`ctx_search`**: one query across three layers at once: project **memories**, raw **conversation** history, and indexed **git commits**. Semantic embeddings with full-text fallback.
+- **`ctx_search`**: one query across four layers at once: project **memories**, raw **conversation** history, indexed **git commits**, and (opt-in) the long-term **external** memory backend. Semantic embeddings with full-text fallback.
 
   ```
   ctx_search(query="why did we pick event sourcing for orders")
@@ -191,6 +191,8 @@ Because it runs during idle time, the dreamer pairs well with local models, even
 
 Recall works **across sessions** (a new session inherits everything) and **across harnesses** (write a memory in OpenCode, retrieve it in Pi).
 
+> **Long-term memory** *(opt-in, off by default)* tees curated writes (historian promotions, `ctx_memory` writes, dreamer user-memory promotions) to a Hindsight backend and recalls them BACK once per session as a `<external-memory>` block — across sessions, across harnesses, and across projects for the global slice. Same `ctx_search` "external" source (explicit-only, never on the auto-search hot path). User-config-only; a repo cannot redirect the endpoint. Configure under `memory.external`; see [CONFIGURATION.md](./CONFIGURATION.md#memoryexternal).
+>
 > **Auto search hints** *(on by default)* run a background `ctx_search` each turn and whisper a "vague recall" when something relevant exists — like almost remembering a note you took. It appends only compact fragments, never full content; set `memory.auto_search.enabled: false` to turn it off. **Git commit indexing** *(opt-in)* makes your project history semantically searchable as a fourth `ctx_search` source — enable with `memory.git_commit_indexing.enabled: true`.
 
 ### Agent tools at a glance
@@ -198,8 +200,8 @@ Recall works **across sessions** (a new session inherits everything) and **acros
 | Tool | Section | What it does |
 |------|-------|-------------|
 | `ctx_reduce` | Context | Queue stale tagged content for removal, cache-aware |
-| `ctx_memory` | Capture | Write or delete durable cross-session memories |
-| `ctx_search` | Recall | Search memories, conversation history, and git commits |
+| `ctx_memory` | Capture | Write or delete durable cross-session memories (project scope, plus `global` scope to the external main bank when configured) |
+| `ctx_search` | Recall | Search memories, conversation history, git commits, and (explicit-only) the external long-term memory backend |
 | `ctx_expand` | Recall | Decompress a history range back to the transcript |
 | `ctx_note` | Recall | Deferred intentions and dreamer-evaluated smart notes |
 
