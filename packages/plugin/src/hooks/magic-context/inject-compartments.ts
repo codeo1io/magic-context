@@ -1408,6 +1408,16 @@ function renderExternalItem(item: ExternalRecallSliceItem): string {
         : `- ${escapeXmlContent(item.content)}`;
 }
 
+/** Body of the <external-memory> block. INTENTIONALLY merges only the
+ *  `project` and `global` slices — the `profile` slice is omitted here by
+ *  design and is rendered separately into the <user-profile> block (see
+ *  `renderUserProfileBlock(..., externalRecall?.profile ?? [])` in `renderM0`).
+ *  Duplicating profile lines into <external-memory> would be redundant
+ *  (the model would see the same recall content twice) and would defeat
+ *  the user-profile budget trim that lives on that block. Note that the
+ *  sibling `renderExternalDeltaLines` (m[1] delta path) DOES include the
+ *  profile slice — there profile lines reconcile into <user-profile> at
+ *  the next HARD fold, per its own comment. */
 function renderExternalLines(snapshot: ExternalRecallSnapshot): string[] {
     const items: ExternalRecallSliceItem[] = [...snapshot.project, ...snapshot.global];
     const lines: string[] = [];
@@ -1504,6 +1514,11 @@ export function renderM0(args: {
 }): string {
     const sections: string[] = [];
     if (args.projectDocs.length > 0) sections.push(args.projectDocs);
+    // The external-recall PROFILE slice is merged HERE (into <user-profile>),
+    // not into <external-memory>. `renderExternalLines` deliberately emits
+    // only project + global — see its JSDoc for the rationale. Splitting the
+    // merge this way lets the user-profile budget trim govern recall-derived
+    // profile lines without inflating the sibling <external-memory> block.
     const userProfile = renderUserProfileBlock(
         trimUserMemoriesToBudget(
             args.userProfileBaseline,
