@@ -184,34 +184,24 @@ function createCtxSearchTool(deps: CtxSearchToolDeps): ToolDefinition {
             const gitCommitsEnabled =
                 embeddingSnapshot?.gitCommitEnabled ?? deps.gitCommitsEnabled ?? false;
 
-            const results = await unifiedSearch(
-                deps.db,
-                searchSessionId,
-                projectPath,
-                query,
-                {
-                    limit: normalizeLimit(args.limit),
-                    memoryEnabled,
-                    embeddingEnabled,
-                    embedQuery: async (text, signal) => {
-                        const result = await embedTextForProject(
-                            projectPath,
-                            text,
-                            signal,
-                            "query",
-                        );
-                        return result?.vector ?? null;
-                    },
-                    isEmbeddingRuntimeEnabled: () => embeddingEnabled === true,
-                    readMessages: deps.readMessages,
-                    maxMessageOrdinal: messageOrdinalCutoff,
-                    gitCommitsEnabled,
-                    sources: normalizeSources(args.sources),
-                    visibleMemoryIds,
-                    // Explicit agent search → enable literal-probe multi-query
-                    // recall for symbol/command/path lookups. Auto-search hints
-                    // (the hot path) leave this off to protect their latency.
-                    explicitSearch: true,
+            const results = await unifiedSearch(deps.db, searchSessionId, projectPath, query, {
+                limit: normalizeLimit(args.limit),
+                memoryEnabled,
+                embeddingEnabled,
+                embedQuery: async (text, signal) => {
+                    const result = await embedTextForProject(projectPath, text, signal, "query");
+                    return result?.vector ?? null;
+                },
+                isEmbeddingRuntimeEnabled: () => embeddingEnabled === true,
+                readMessages: deps.readMessages,
+                maxMessageOrdinal: messageOrdinalCutoff,
+                gitCommitsEnabled,
+                sources: normalizeSources(args.sources),
+                visibleMemoryIds,
+                // Explicit agent search → enable literal-probe multi-query
+                // recall for symbol/command/path lookups. Auto-search hints
+                // (the hot path) leave this off to protect their latency.
+                explicitSearch: true,
                 // External bank resolution: basename is the human-readable label the
                 // engine uses as a bank template parameter, NOT a key. Project
                 // identity (resolveProjectPath's output) is the key.
