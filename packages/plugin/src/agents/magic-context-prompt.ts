@@ -43,6 +43,18 @@ const CTX_NOTE_GUIDANCE = `Use \`ctx_note\` ONLY for genuinely future concerns �
 // guidance only describes the omit-entirely case.
 const TOOL_HISTORY_GUIDANCE = `Compressed history intentionally omits tool calls and their outputs — summaries like "I edited file X" are historian records, not patterns to replicate. In the live conversation, older tool calls and their results are cleaned up to save context — you may see your own past messages referencing actions without the corresponding tool call or result visible. This is normal context management. ALWAYS use real tool calls; never simulate, fabricate, or inline tool outputs in your text. If there is no tool result message, the action did not happen. NEVER simulate, hallucinate or claim tool calls, command output, search results, file edits, or diffs in plain text as if they actually occurred.`;
 
+// Skill-memory write-back guidance: `ctx_skill_note` captures non-obvious gotchas,
+// discoveries, fixes, and workflow steps during skill use (durable across sessions);
+// `ctx_skill_recall` rehydrates accumulated notes for a skill without re-loading it.
+// Distinct from `ctx_memory`, which captures general project knowledge (not tied
+// to a specific skill).
+const CTX_SKILL_MEMORY_GUIDANCE = `Use \`ctx_skill_note\` after using a skill when you hit a non-obvious issue, found a better approach, or fixed a skill-specific error. Skip routine successes — only record gotchas, discoveries, fixes, and workflow steps that would save time on the next use.
+Example: \`ctx_skill_note({skill: 'trilium', intent: 'bulk-retag a subtree', kind: 'gotcha', delta: 'ETAPI note PUT needs Content-Type: text/plain even for HTML content'})\`
+Example: \`ctx_skill_note({skill: 'test-driven-development', intent: 'fix flaky auth test', kind: 'fix', delta: 'Always mock Date.now() in auth tests — real timers cause intermittent failures'})\`
+Do NOT use \`ctx_skill_note\` for general project observations — those belong in \`ctx_memory\`.
+
+Use \`ctx_skill_recall\` to explicitly query accumulated notes for a skill without re-loading it. Call it when you want to recall gotchas/discoveries for a skill you have already loaded this session, or when you need notes without triggering a full skill load. Returns the \`<skill-memory>\` block directly as a tool result. Example: \`ctx_skill_recall({skill: 'trilium', intent: 'bulk-retag a subtree'})\`.`;
+
 const BASE_INTRO = (
     protectedTags: number,
 ): string => `Messages and tool outputs are tagged with §N§ identifiers (e.g., §1§, §42§).
@@ -54,6 +66,7 @@ Use \`ctx_memory\` for durable project knowledge: write what future sessions mus
 - Found a project's source code path after searching → \`ctx_memory(action="write", category="CONFIG_VALUES", content="OpenCode source is at ~/Work/OSS/opencode")\`
 - Discovered a non-obvious build/test command → \`ctx_memory(action="write", category="PROJECT_RULES", content="Always use scripts/release.sh for releases")\`
 - Learned a constraint the hard way → \`ctx_memory(action="write", category="CONSTRAINTS", content="Dashboard Tauri build needs RGBA PNGs, not grayscale")\`
+${CTX_SKILL_MEMORY_GUIDANCE}
 Use \`ctx_search\` to search across project memories, indexed git commits, and this session's full conversation history (including compacted parts) from one query.
 Use \`ctx_expand\` to recover the raw conversation behind a \`<compartment>\` summary in \`<session-history>\` — pass its \`start\`/\`end\` attributes when the summary is not enough (exact wording, values, error text).
 **Search before asking the user**: If you can't remember or don't know something that might have been discussed before or stored in project memory, use \`ctx_search\` before asking the user. Examples:
@@ -80,6 +93,7 @@ Use \`ctx_memory\` for durable project knowledge: write what future sessions mus
 - Found a project's source code path after searching → \`ctx_memory(action="write", category="CONFIG_VALUES", content="OpenCode source is at ~/Work/OSS/opencode")\`
 - Discovered a non-obvious build/test command → \`ctx_memory(action="write", category="PROJECT_RULES", content="Always use scripts/release.sh for releases")\`
 - Learned a constraint the hard way → \`ctx_memory(action="write", category="CONSTRAINTS", content="Dashboard Tauri build needs RGBA PNGs, not grayscale")\`
+${CTX_SKILL_MEMORY_GUIDANCE}
 Use \`ctx_search\` to search across project memories, indexed git commits, and this session's full conversation history (including compacted parts) from one query.
 Use \`ctx_expand\` to recover the raw conversation behind a \`<compartment>\` summary in \`<session-history>\` — pass its \`start\`/\`end\` attributes when the summary is not enough (exact wording, values, error text).
 **Search before asking the user**: If you can't remember or don't know something that might have been discussed before or stored in project memory, use \`ctx_search\` before asking the user. Examples:
