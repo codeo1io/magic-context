@@ -390,7 +390,7 @@ Magic Context runs in three effective modes depending on `ctx_reduce_enabled` an
 | Channel 2 ceiling nudge (synthetic-user, one-shot) | ✓ | ✗ | ✗ |
 | Deferred-note nudges | ✓ | ✗ | ✗ |
 | Synthetic-todowrite injection | ✓ | ✓ | ✗ |
-| Skill-memory `<skill-memory>` recall append (transparent after-hook) | ✓ | ✓ | ✗ |
+| Skill-memory `<skill-memory>` recall append (transparent after-hook) | ✓ | ✓ | ✓ |
 | Auto-search hint | ✓ | ✓ | ✗ |
 | Heuristic tool drops at execute threshold | ✓ (once per user turn) | ✓ (once per user turn) | ✓ (every execute pass — no once-per-turn guard) |
 | Heuristic reasoning clearing | ✓ | ✓ | ✓ |
@@ -398,7 +398,7 @@ Magic Context runs in three effective modes depending on `ctx_reduce_enabled` an
 | 95 % block + emergency recovery | ✓ | ✓ | ✗ (overflow handled via `overflow-detection.ts` only; no recovery flag persisted) |
 | Experimental age-tier caveman text compression | ✗ | opt-in via `experimental.caveman_text_compression.enabled` | ✗ |
 
-**Subagent rationale:** subagents are driven by a parent agent, have bounded lifetimes, and often run in parallel (council, historian, sidekick, dreamer child sessions). They still benefit from automatic heuristic drops on their own context at execute passes (running on EVERY execute pass, not once-per-turn — long-running subagents are effectively one parent turn, and they'd starve under the parent's once-per-turn gate), but turning on historian, nudges, or prompt-adjunct injections in each subagent would create redundant work and per-agent cache churn. Subagents that run into overflow fall back to the existing `overflow-detection.ts` path; the detected limit is recorded so future passes use the lower value, but no emergency-recovery flag is persisted because subagents don't consume that path.
+**Subagent rationale:** subagents are driven by a parent agent, have bounded lifetimes, and often run in parallel (council, historian, sidekick, dreamer child sessions). They still benefit from automatic heuristic drops on their own context at execute passes (running on EVERY execute pass, not once-per-turn — long-running subagents are effectively one parent turn, and they'd starve under the parent's once-per-turn gate), but turning on historian, nudges, or prompt-adjunct injections in each subagent would create redundant work and per-agent cache churn. Subagents that run into overflow fall back to the existing `overflow-detection.ts` path; the detected limit is recorded so future passes use the lower value, but no emergency-recovery flag is persisted because subagents don't consume that path. The skill-memory `<skill-memory>` recall append is the one exception that IS active for subagents: it rides the same ungated `tool.execute.after` path as the Channel-1 nudge (it is a tool-result append, NOT a prompt-adjunct injection), so an implementer subagent that loads a skill benefits from that skill's accumulated gotchas — the append lands in the subagent's own tool result (cache-safe in its context) at the cost of a single DB read.
 
 **`ctx_reduce_enabled: false` rationale:** removes agent-facing reduction machinery (the tool itself, nudges asking the agent to use it, and `§N§` prefix injection the agent can't act on) while keeping the deterministic parts (historian, heuristic drops, compartment injection, memory, synthetic-todowrite). Users who want a fully automatic pipeline can opt in and optionally enable caveman age-tier compression to recover most of the win that manual `ctx_reduce` gives for long user / assistant text parts.
 
