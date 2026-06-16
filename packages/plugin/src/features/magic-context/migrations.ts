@@ -1435,6 +1435,44 @@ const MIGRATIONS: Migration[] = [
             }
         },
     },
+
+    {
+        version: 38,
+        description: "Add skill_memory table for per-skill cross-session recall",
+        up: (db: Database) => {
+            db.exec(`
+                CREATE TABLE IF NOT EXISTS skill_memory (
+                  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                  skill_id        TEXT NOT NULL,
+                  resolved_path   TEXT NOT NULL,
+                  tier            TEXT NOT NULL CHECK(tier IN ('project', 'global')),
+                  skill_source    TEXT CHECK(skill_source IN (
+                                    'opencode-project', 'opencode-global',
+                                    'claude-skills', 'agents-skills'
+                                  )),
+                  project_identity TEXT NOT NULL,
+                  intent          TEXT NOT NULL,
+                  intent_embedding BLOB,
+                  embedding_model_version TEXT,
+                  kind            TEXT NOT NULL CHECK(kind IN ('gotcha', 'discovery', 'fix', 'workflow')),
+                  delta           TEXT NOT NULL,
+                  tags            TEXT,
+                  hit_count       INTEGER NOT NULL DEFAULT 0,
+                  pinned          INTEGER NOT NULL DEFAULT 0 CHECK(pinned IN (0, 1)),
+                  normalized_hash TEXT NOT NULL,
+                  created_at      INTEGER NOT NULL,
+                  last_used_at    INTEGER,
+                  UNIQUE(skill_id, tier, project_identity, normalized_hash)
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_skill_memory_lookup
+                  ON skill_memory(skill_id, tier, project_identity, last_used_at DESC);
+
+                CREATE INDEX IF NOT EXISTS idx_skill_memory_fts_prep
+                  ON skill_memory(skill_id, tier, project_identity, kind);
+            `);
+        },
+    },
 ];
 
 /**
