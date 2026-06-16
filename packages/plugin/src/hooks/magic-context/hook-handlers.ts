@@ -463,6 +463,67 @@ function maybeInjectChannel1Nudge(
     );
 }
 
+// ── intentByCallId stash map ────────────────────────────────────────────────
+// Keyed by callID (= options.toolCallId, identical before↔after).
+// Bounded: 60s TTL + 256-entry hard cap. The after-hook deletes in a finally;
+// this map is the backstop for callIDs whose after-hook never fires (crash,
+// swallowed exception, tool error).
+// Spike C (Task 0a) confirmed: tool.execute.before fires PRE-validation on
+// raw output.args, so intent is present before Effect-Schema strips it.
+
+export type IntentByCallIdMap = Map<string, { intent: string; ts: number }>;
+
+export function createIntentByCallIdMap(): IntentByCallIdMap {
+    return new Map();
+}
+
+const INTENT_TTL_MS = 60_000;
+const INTENT_MAP_CAP = 256;
+
+export function stashIntent(map: IntentByCallIdMap, callId: string, intent: string): void {
+    // Sweep stale entries (TTL backstop)
+    const now = Date.now();
+    for (const [key, entry] of map) {
+        if (now - entry.ts > INTENT_TTL_MS) {
+            map.delete(key);
+        }
+    }
+    // Hard cap: evict oldest if at limit
+    if (map.size >= INTENT_MAP_CAP) {
+        let oldestKey: string | undefined;
+        let oldestTs = Infinity;
+        for (const [key, entry] of map) {
+            if (entry.ts < oldestTs) {
+                oldestTs = entry.ts;
+                oldestKey = key;
+            }
+        }
+        if (oldestKey !== undefined) map.delete(oldestKey);
+    }
+    map.set(callId, { intent, ts: now });
+}
+
+export function getAndDeleteIntent(map: IntentByCallIdMap, callId: string): string | null {
+    const entry = map.get(callId);
+    if (!entry) return null;
+    map.delete(callId);
+    return entry.intent;
+}
+
+// ── createToolExecuteBeforeHook ─────────────────────────────────────────────
+
+export function createToolExecuteBeforeHook(args: { intentByCallId: IntentByCallIdMap }) {
+    return async (input: unknown, output?: unknown) => {
+        const typedInput = input as { tool?: string; callID?: string };
+        const typedOutput = output as { args?: Record<string, unknown> } | undefined;
+        if (typedInput.tool !== "skill") return;
+        if (!typedInput.callID) return;
+        const intent = typedOutput?.args?.intent;
+        if (typeof intent !== "string") return;
+        stashIntent(args.intentByCallId, typedInput.callID, intent);
+    };
+}
+
 export function createToolExecuteAfterHook(args: {
     db: Parameters<typeof getOrCreateSessionMeta>[0];
     channel1StateBySession: Map<string, Channel1State>;

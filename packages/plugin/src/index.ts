@@ -462,6 +462,9 @@ const plugin: Plugin = async (ctx) => {
         "tool.execute.after": async (input, output) => {
             await hooks.magicContext?.["tool.execute.after"]?.(input, output);
         },
+        "tool.execute.before": async (input, output) => {
+            await hooks.magicContext?.["tool.execute.before"]?.(input, output);
+        },
         "experimental.text.complete": async (input, output) => {
             await hooks.magicContext?.["experimental.text.complete"]?.(input, output);
         },
