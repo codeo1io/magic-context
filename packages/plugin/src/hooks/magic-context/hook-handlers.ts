@@ -527,11 +527,59 @@ export function createToolExecuteBeforeHook(args: { intentByCallId: IntentByCall
 export function createToolExecuteAfterHook(args: {
     db: Parameters<typeof getOrCreateSessionMeta>[0];
     channel1StateBySession: Map<string, Channel1State>;
+    skillLoadRegistry: import("../../features/magic-context/skill-memory/provenance").SkillLoadRegistry;
 }) {
     return async (input: unknown, output?: unknown) => {
         const typedInput = input as { tool?: string; sessionID?: string; args?: unknown };
         if (!typedInput.sessionID || !typedInput.tool) {
             return;
+        }
+
+        // Skill-memory: populate registry when skill tool completes.
+        // Frontmatter MUST be read from DISK (proven in Task 0b: opencode's
+        // skill loader strips the skill-memory: block from the model-facing
+        // output). Reading output.output would always yield null. We re-read
+        // SKILL.md from provenance.resolvedPath (which IS present in the
+        // output's "Base directory for this skill:" line).
+        if (typedInput.tool === "skill") {
+            const typedOutput = output as { output?: unknown } | undefined;
+            if (typeof typedOutput?.output === "string") {
+                const skillArgs = typedInput.args as { name?: unknown } | undefined;
+                const skillId = typeof skillArgs?.name === "string" ? skillArgs.name : null;
+                if (skillId) {
+                    try {
+                        const { parseSkillProvenance, registryKey } = await import(
+                            "../../features/magic-context/skill-memory/provenance"
+                        );
+                        const { parseFrontmatterConfig } = await import(
+                            "../../features/magic-context/skill-memory/frontmatter"
+                        );
+                        const provenance = parseSkillProvenance(typedOutput.output, skillId);
+                        if (provenance) {
+                            let frontmatterConfig:
+                                | import("../../features/magic-context/skill-memory/frontmatter").SkillMemoryConfig
+                                | null = null;
+                            try {
+                                const { readFileSync } = await import("node:fs");
+                                const rawSkillContent = readFileSync(
+                                    provenance.resolvedPath,
+                                    "utf-8",
+                                );
+                                frontmatterConfig = parseFrontmatterConfig(rawSkillContent);
+                            } catch {
+                                // Non-fatal: SKILL.md unreadable → frontmatterConfig stays null
+                                // (skill-memory disabled for this skill load)
+                            }
+                            args.skillLoadRegistry.set(registryKey(typedInput.sessionID, skillId), {
+                                ...provenance,
+                                frontmatterConfig,
+                            });
+                        }
+                    } catch {
+                        // Non-fatal: registry miss means ctx_skill_note will surface an actionable error
+                    }
+                }
+            }
         }
 
         if (typedInput.tool === "ctx_reduce") {

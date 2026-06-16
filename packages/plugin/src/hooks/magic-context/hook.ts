@@ -24,6 +24,10 @@ import {
 } from "../../features/magic-context/project-embedding-registry";
 import type { Scheduler } from "../../features/magic-context/scheduler";
 import {
+    createSkillLoadRegistry,
+    type SkillLoadRegistry,
+} from "../../features/magic-context/skill-memory/provenance";
+import {
     getDatabasePersistenceError,
     getSessionsWithPendingMarker,
     isDatabasePersisted,
@@ -285,6 +289,13 @@ export function createMagicContextHook(deps: MagicContextDeps) {
     // tool.execute.before. Bounded: 60s TTL + 256-entry hard cap + finally-delete
     // in after-hook. Cleared in onSessionDeleted.
     const intentByCallId = createIntentByCallIdMap();
+    // skillLoadRegistry: session-scoped registry of (skillId → SkillProvenance +
+    // frontmatterConfig), populated in tool.execute.after for the skill tool.
+    // Per-session cleanup in onSessionDeleted (keyed as `${sessionId}:${skillId}`).
+    // Exposed on the hook's return value so the same instance flows to
+    // createCtxSkillNoteTool (index.ts, Task 8) — otherwise the tool sees a
+    // disconnected empty Map and recall is dead on arrival.
+    const skillLoadRegistry: SkillLoadRegistry = createSkillLoadRegistry();
 
     /**
      * Return the live provider/model for a session.
@@ -663,6 +674,13 @@ export function createMagicContextHook(deps: MagicContextDeps) {
             // If concurrent multi-session use becomes common, key entries as `${sessionID}:${callID}`
             // and filter on delete. For P1, document-as-intentional is the chosen fix.
             intentByCallId.clear(); // clear all entries on session delete (bounded map; cross-session clear is intentional — see note above)
+            // skillLoadRegistry is keyed as `${sessionId}:${skillId}` so we can prune
+            // per-session entries without cross-session bleed. Without this, deleted
+            // sessions' skill loads would persist in the registry for the plugin's
+            // lifetime (potentially days/weeks), slowly leaking memory.
+            for (const key of skillLoadRegistry.keys()) {
+                if (key.startsWith(`${sessionId}:`)) skillLoadRegistry.delete(key);
+            }
         },
     });
 
@@ -924,7 +942,13 @@ export function createMagicContextHook(deps: MagicContextDeps) {
         "tool.execute.after": createToolExecuteAfterHook({
             db,
             channel1StateBySession,
+            skillLoadRegistry,
         }),
         "tool.execute.before": createToolExecuteBeforeHook({ intentByCallId }),
+        // Exposed so index.ts can pass the SAME instance to createCtxSkillNoteTool.
+        // The after-hook populates this registry; the tool reads from it. Without
+        // this, the tool would receive a fresh empty Map and ctx_skill_note would
+        // always return "No recent skill load found".
+        skillLoadRegistry,
     };
 }
