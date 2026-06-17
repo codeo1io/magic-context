@@ -16,7 +16,7 @@ function tableExists(db: Database, name: string): boolean {
     );
 }
 
-describe("migration v38 — skill_memory table", () => {
+describe("migration v37 — skill_memory table", () => {
     test("creates skill_memory table with correct columns on fresh DB, idempotently", () => {
         const db = new Database(":memory:");
         try {
@@ -116,8 +116,8 @@ describe("migration v38 — skill_memory table", () => {
         }
     });
 
-    test("LATEST_SUPPORTED_VERSION equals LATEST_MIGRATION_VERSION after v38", () => {
-        // This test will fail until storage-db.ts is bumped to 38.
+    test("LATEST_SUPPORTED_VERSION equals LATEST_MIGRATION_VERSION after v37", () => {
+        // This test will fail until storage-db.ts is bumped to 37.
         // Belt-and-braces: mirrors schema-version-fence.test.ts but is co-located with the migration.
         // If this feels redundant, keep it with this comment — co-location aids discoverability.
         // NOTE: use ESM import at the top of the file (not require()) to match codebase pattern.

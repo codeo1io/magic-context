@@ -1437,7 +1437,7 @@ const MIGRATIONS: Migration[] = [
     },
 
     {
-        version: 38,
+        version: 37,
         description: "Add skill_memory table for per-skill cross-session recall",
         up: (db: Database) => {
             db.exec(`

@@ -548,7 +548,6 @@ export function buildStatusDetail(
         ? getSkillMemoryStats(db, base.projectIdentity)
         : null;
 
-
     try {
         const meta = db
             .prepare<[string], Record<string, unknown>>(

@@ -363,7 +363,7 @@ Configures the dreamer agent — both the model it uses and the maintenance task
 | `archive-stale` | Archive memories that reference removed features, old paths, or discontinued workflows. |
 | `improve` | Rewrite verbose or narrative memories into terse operational statements. |
 | `maintain-docs` | Keep `ARCHITECTURE.md` and `STRUCTURE.md` at project root synchronized with the codebase. |
-| `distill-skill-memory` | **Opt-in** (NOT a default — add it to your `tasks` list to enable). Merge near-duplicate skill notes, prune stale low-hit notes, promote recurring gotchas to `pinned=1`, enforce per-skill note caps. Processes at most 5 skill groups per run (rotating by `last_distilled_at`). Requires the `skill_memory` table (migration v38) — auto-created on upgrade. |
+| `distill-skill-memory` | **Opt-in** (NOT a default — add it to your `tasks` list to enable). Merge near-duplicate skill notes, prune stale low-hit notes, promote recurring gotchas to `pinned=1`, enforce per-skill note caps. Processes at most 5 skill groups per run (rotating by `last_distilled_at`). Requires the `skill_memory` table (migration v37) — auto-created on upgrade. |
 
 ### How scheduling works
 

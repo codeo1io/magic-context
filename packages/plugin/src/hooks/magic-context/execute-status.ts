@@ -33,7 +33,7 @@ function formatExecuteThreshold(
     return `${thresholdPercentage}%`;
 }
 
-export function executeStatus(
+export async function executeStatus(
     db: Database,
     sessionId: string,
     protectedTags: number,
@@ -188,12 +188,11 @@ export function executeStatus(
             }
         }
 
-
         // Skill-memory stats — only when a directory is available to resolve
         // the project identity (skill_memory is partitioned on
         // project_identity). Mirrors the external-memory section's pattern:
         // surface counts only when there is something to show, skip otherwise.
-        // Wrapped in try/catch so a missing skill_memory table (e.g. pre-v38
+        // Wrapped in try/catch so a missing skill_memory table (e.g. pre-v37
         // migration in tests) doesn't fail the whole status output — same
         // defensive pattern the tags / pending_ops queries use.
         if (directory) {
@@ -211,10 +210,9 @@ export function executeStatus(
                     }
                 }
             } catch {
-                // skill_memory may not exist (pre-v38 schema) — skip silently
+                // skill_memory may not exist (pre-v37 schema) — skip silently
             }
         }
-
 
         return lines.join("\n");
     } catch (error) {
