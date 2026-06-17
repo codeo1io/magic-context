@@ -444,6 +444,26 @@ const StatusDialog = (props: { api: TuiPluginApi; s: StatusDetail }) => {
                             </box>
                         )
                     })()}
+                    {/* Skill-memory store (per-skill cross-session recall) —
+                        only when the status detail carries the aggregate
+                        (requires a resolved project identity). Mirrors the
+                        text-mode executeStatus "### Skill memory" section. */}
+                    {s().skillMemory && (() => {
+                        const sm = s().skillMemory!
+                        return (
+                            <box flexDirection="column">
+                                <box marginTop={1}>
+                                    <text fg={t().text}><b>Skill Memory</b></text>
+                                </box>
+                                <R
+                                    t={t()}
+                                    l="Notes"
+                                    v={`${sm.totalNotes} (${sm.skillsWithNotes} ${sm.skillsWithNotes === 1 ? "skill" : "skills"})`}
+                                />
+                                <R t={t()} l="Pinned" v={String(sm.pinnedNotes)} fg={t().textMuted} />
+                            </box>
+                        )
+                    })()}
                 </box>
             </box>
 

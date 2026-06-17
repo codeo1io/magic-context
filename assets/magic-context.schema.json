@@ -357,7 +357,8 @@
               "verify",
               "archive-stale",
               "improve",
-              "maintain-docs"
+              "maintain-docs",
+              "distill-skill-memory"
             ]
           }
         },

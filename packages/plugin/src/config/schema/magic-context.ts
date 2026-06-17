@@ -22,6 +22,7 @@ export const DREAMER_TASKS = [
     "archive-stale",
     "improve",
     "maintain-docs",
+    "distill-skill-memory", // opt-in: requires skill_memory table (P1) + feature enabled
 ] as const;
 
 export const DreamingTaskSchema = z.enum(DREAMER_TASKS);

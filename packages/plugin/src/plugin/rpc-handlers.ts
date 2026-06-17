@@ -10,6 +10,7 @@ import {
 import { readExternalRecallSnapshot } from "../features/magic-context/memory/external-recall-read";
 import { resolveProjectIdentity } from "../features/magic-context/memory/project-identity";
 import { getEmbeddingCoverageStatus } from "../features/magic-context/project-embedding-registry";
+import { getSkillMemoryStats } from "../features/magic-context/skill-memory/storage";
 import {
     type ContextDatabase as Database,
     openDatabase,
@@ -541,6 +542,7 @@ export async function buildStatusDetail(
         compressionBudget: null,
         compressionUsage: null,
         externalMemory: null,
+        skillMemory: null,
     };
 
     const externalStatus = getExternalMemoryStatus();
@@ -558,6 +560,15 @@ export async function buildStatusDetail(
             failedRetainCount,
         };
     }
+
+    // Skill-memory stats — scoped to the session's project identity (the
+    // skill_memory table is partitioned on project_identity). base.projectIdentity
+    // is resolved by buildSidebarSnapshot; we re-use it here to avoid a second
+    // resolveProjectIdentity call. Null identity → null stats (status dialog
+    // hides the section). Single SQL aggregate, sync, safe to call every poll.
+    detail.skillMemory = base.projectIdentity
+        ? getSkillMemoryStats(db, base.projectIdentity)
+        : null;
 
     try {
         const meta = db
