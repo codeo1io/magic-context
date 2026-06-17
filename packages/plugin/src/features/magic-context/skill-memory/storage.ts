@@ -142,6 +142,15 @@ export function bumpHitCount(
 }
 
 /**
+ * Bump hit_count + last_used_at for a note identified by id (used by cosine dedup, which has no hash).
+ */
+export function bumpHitCountById(db: Database, id: number): void {
+    db.prepare(
+        `UPDATE skill_memory SET hit_count = hit_count + 1, last_used_at = ? WHERE id = ?`,
+    ).run(Date.now(), id);
+}
+
+/**
  * Check if a note with the given normalized_hash already exists.
  * Returns the existing note's id and hit_count, or null.
  */

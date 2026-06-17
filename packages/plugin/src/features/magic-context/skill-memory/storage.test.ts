@@ -5,6 +5,7 @@ import { runMigrations } from "../migrations";
 import { initializeDatabase } from "../storage-db";
 import {
     bumpHitCount,
+    bumpHitCountById,
     getSkillMemoryNotes,
     getSkillMemoryStats,
     type InsertSkillMemoryNoteArgs,
@@ -102,6 +103,29 @@ describe("skill_memory storage", () => {
             // Both notes should be returned; order is recency × hit_count
             expect(notes.map((n) => n.delta)).toContain("note A (high hit_count)");
             expect(notes.map((n) => n.delta)).toContain("note B (recent)");
+        } finally {
+            closeQuietly(db);
+        }
+    });
+
+    test("bumpHitCountById increments by id", () => {
+        const db = makeDb();
+        try {
+            const id = Number(
+                (
+                    db
+                        .prepare(
+                            `INSERT INTO skill_memory (skill_id,resolved_path,tier,project_identity,intent,kind,delta,normalized_hash,hit_count,pinned,created_at)
+                         VALUES ('s','/p','global','git:x','i','fix','d','h',0,0,1) RETURNING id`,
+                        )
+                        .get() as { id: number }
+                ).id,
+            );
+            bumpHitCountById(db, id);
+            const row = db.prepare("SELECT hit_count FROM skill_memory WHERE id=?").get(id) as {
+                hit_count: number;
+            };
+            expect(row.hit_count).toBe(1);
         } finally {
             closeQuietly(db);
         }
