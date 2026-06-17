@@ -9,6 +9,7 @@ export interface SkillMemoryNote {
     project_identity: string;
     intent: string;
     intent_embedding: Buffer | null;
+    delta_embedding: Buffer | null;
     embedding_model_version: string | null;
     kind: "gotcha" | "discovery" | "fix" | "workflow";
     delta: string;
@@ -30,6 +31,9 @@ export interface InsertSkillMemoryNoteArgs {
     kind: "gotcha" | "discovery" | "fix" | "workflow";
     delta: string;
     tags?: string[];
+    intentEmbedding?: Buffer | null;
+    deltaEmbedding?: Buffer | null;
+    embeddingModelVersion?: string | null;
     normalizedHash: string;
     createdAt: number;
 }
@@ -48,8 +52,9 @@ export function insertSkillMemoryNote(
             .prepare(
                 `INSERT INTO skill_memory
                    (skill_id, resolved_path, tier, skill_source, project_identity,
-                    intent, kind, delta, tags, hit_count, pinned, normalized_hash, created_at)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?)`,
+                    intent, kind, delta, tags, intent_embedding, delta_embedding, embedding_model_version,
+                    hit_count, pinned, normalized_hash, created_at)
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?)`,
             )
             .run(
                 args.skillId,
@@ -61,6 +66,9 @@ export function insertSkillMemoryNote(
                 args.kind,
                 args.delta,
                 args.tags ? JSON.stringify(args.tags) : null,
+                args.intentEmbedding ?? null,
+                args.deltaEmbedding ?? null,
+                args.embeddingModelVersion ?? null,
                 args.normalizedHash,
                 args.createdAt,
             );

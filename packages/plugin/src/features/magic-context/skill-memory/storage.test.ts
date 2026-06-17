@@ -3,6 +3,7 @@ import { Database } from "../../../shared/sqlite";
 import { closeQuietly } from "../../../shared/sqlite-helpers";
 import { runMigrations } from "../migrations";
 import { initializeDatabase } from "../storage-db";
+import { float32ArrayToBlob } from "../memory/storage-memory-embeddings";
 import {
     bumpHitCount,
     bumpHitCountById,
@@ -61,6 +62,35 @@ describe("skill_memory storage", () => {
             insertSkillMemoryNote(db, args);
             const result = insertSkillMemoryNote(db, args); // duplicate
             expect(result).toBeNull();
+        } finally {
+            closeQuietly(db);
+        }
+    });
+
+    test("insertSkillMemoryNote stores intent_embedding/delta_embedding/embedding_model_version", () => {
+        const db = makeDb();
+        try {
+            const iv = float32ArrayToBlob(new Float32Array([1, 0, 0]));
+            const dv = float32ArrayToBlob(new Float32Array([0, 1, 0]));
+            const id = insertSkillMemoryNote(db, {
+                skillId: "s",
+                resolvedPath: "/p",
+                tier: "global",
+                skillSource: null,
+                projectIdentity: "git:x",
+                intent: "i",
+                kind: "fix",
+                delta: "d",
+                normalizedHash: "emb-hash",
+                createdAt: 1,
+                intentEmbedding: iv,
+                deltaEmbedding: dv,
+                embeddingModelVersion: "m1",
+            });
+            const row = db
+                .prepare("SELECT embedding_model_version FROM skill_memory WHERE id=?")
+                .get(id) as { embedding_model_version: string };
+            expect(row.embedding_model_version).toBe("m1");
         } finally {
             closeQuietly(db);
         }
