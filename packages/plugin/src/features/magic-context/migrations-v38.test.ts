@@ -10,7 +10,7 @@ function columnNames(db: Database, table: string): string[] {
     );
 }
 
-describe("migration v37 — external recall snapshot + m[0] marker", () => {
+describe("migration v38 — external recall snapshot + m[0] marker", () => {
     test("adds external recall columns to session_meta on a fresh DB, idempotently", () => {
         const db = new Database(":memory:");
         try {
@@ -40,14 +40,14 @@ describe("migration v37 — external recall snapshot + m[0] marker", () => {
             runMigrations(db);
 
             db.prepare("INSERT INTO session_meta (session_id, harness) VALUES (?, ?)").run(
-                "ses_v37",
+                "ses_v38",
                 "test-harness",
             );
             const row = db
                 .prepare(
                     "SELECT external_recall_json, external_recall_state, external_recall_at, cached_m0_external_recall_hash FROM session_meta WHERE session_id = ?",
                 )
-                .get("ses_v37") as Record<string, unknown>;
+                .get("ses_v38") as Record<string, unknown>;
 
             expect(row.external_recall_json).toBeNull();
             expect(row.external_recall_state).toBeNull();

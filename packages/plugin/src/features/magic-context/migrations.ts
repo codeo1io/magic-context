@@ -1439,9 +1439,10 @@ const MIGRATIONS: Migration[] = [
     {
         // Was v31 on the pre-v0.23 external-memory-backend branch; renumbered
         // to v33 pre-v0.24-rebase, then to v37 when upstream v0.24 shipped its
-        // own v33/34/35/36. The body is ensureColumn-idempotent, so a dev DB
-        // that already ran it under an old number re-applies harmlessly.
-        version: 37,
+        // own v33/34/35/36, then to v38 when skill_memory took v37.
+        // The body is ensureColumn-idempotent, so a dev DB that already ran it
+        // under an old number re-applies harmlessly.
+        version: 38,
         description: "External memory v2: session recall snapshot + m[0] recall marker",
         up: (db: Database) => {
             // session_meta existence guard — see v30's comment (partial test fixtures).
