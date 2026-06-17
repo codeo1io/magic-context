@@ -79,8 +79,8 @@ export function insertSkillMemoryNote(
  * Ordered by normalized additive recency + hit_count score (pinned notes first).
  *
  * Scoring: recency_norm + hit_norm where:
- *   recency_norm = (ts - min_ts) / NULLIF(max_ts - min_ts, 1)  — 0..1 range
- *   hit_norm     = hit_count / NULLIF(MAX(hit_count) OVER (), 1) — 0..1 range
+ *   recency_norm = (ts - min_ts) / NULLIF(max_ts - min_ts, 0)  — 0..1 range (0 when all timestamps equal)
+ *   hit_norm     = hit_count / NULLIF(MAX(hit_count) OVER (), 0) — 0..1 range (0 when all hit_counts 0)
  * Additive (not multiplicative) so hit_count is not swamped by timestamp scale.
  *
  * NOTE: The window-function form requires SQLite ≥ 3.25 (2018). Bun ships SQLite ≥ 3.39.
@@ -104,12 +104,18 @@ export function getSkillMemoryNotes(
              FROM skill_memory
              WHERE skill_id = ? AND tier = ? AND project_identity = ?
              ORDER BY
-               pinned DESC,
+                pinned DESC,
                (
-                 (COALESCE(last_used_at, created_at) - MIN(COALESCE(last_used_at, created_at)) OVER ()) * 1.0
-                 / NULLIF(MAX(COALESCE(last_used_at, created_at)) OVER () - MIN(COALESCE(last_used_at, created_at)) OVER (), 1)
+                 COALESCE(
+                   (COALESCE(last_used_at, created_at) - MIN(COALESCE(last_used_at, created_at)) OVER ()) * 1.0
+                   / NULLIF(MAX(COALESCE(last_used_at, created_at)) OVER () - MIN(COALESCE(last_used_at, created_at)) OVER (), 0),
+                   0.0
+                 )
                  +
-                 hit_count * 1.0 / NULLIF(MAX(hit_count) OVER (), 1)
+                 COALESCE(
+                   hit_count * 1.0 / NULLIF(MAX(hit_count) OVER (), 0),
+                   0.0
+                 )
                ) DESC,
                created_at DESC
              LIMIT ?`,

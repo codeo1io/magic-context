@@ -214,6 +214,24 @@ describe("skill_memory storage", () => {
         }
     });
 
+    test("getSkillMemoryNotes: equal timestamps don't break ordering (NULLIF guard)", () => {
+        const db = makeDb();
+        try {
+            const ts = 1_000_000;
+            const ins = (hash: string, hits: number) =>
+                db.prepare(
+                    `INSERT INTO skill_memory (skill_id,resolved_path,tier,project_identity,intent,kind,delta,normalized_hash,hit_count,pinned,created_at,last_used_at)
+                     VALUES ('s','/p','global','git:x','i','fix','d',?,?,0,?,?)`,
+                ).run(hash, hits, ts, ts);
+            ins("a", 1);
+            ins("b", 5);
+            const notes = getSkillMemoryNotes(db, "s", "global", "git:x", 10);
+            expect(notes[0].normalized_hash).toBe("b"); // higher hit_count first when timestamps equal
+        } finally {
+            closeQuietly(db);
+        }
+    });
+
     test("getSkillMemoryStats returns all-zeros when no notes exist for the project", () => {
         const db = makeDb();
         try {
