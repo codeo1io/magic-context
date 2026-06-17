@@ -463,7 +463,16 @@ const plugin: Plugin = async (ctx) => {
             // land correctly on the next flight.
             if (!lastChatContext) return;
             const typedInput = input as { toolID?: string };
-            const typedOutput = output as { description?: unknown; parameters?: unknown };
+            const typedOutput = output as {
+                description?: unknown;
+                parameters?: unknown;
+                jsonSchema?: {
+                    type?: string;
+                    properties?: Record<string, unknown>;
+                    required?: string[];
+                    additionalProperties?: boolean;
+                };
+            };
             if (!typedInput.toolID) return;
             recordToolDefinition(
                 lastChatContext.providerID,
