@@ -526,18 +526,18 @@ export function getAndDeleteIntent(map: IntentByCallIdMap, callId: string): stri
  * Append ordering: this runs BEFORE maybeInjectChannel1Nudge (skill-memory
  * content before Channel-1 meta-reminder). See design §2.6.
  */
-export function maybeInjectSkillMemory(
+export async function maybeInjectSkillMemory(
     db: Database,
     skillId: string,
     tier: "project" | "global",
     projectIdentity: string,
     frontmatterConfig: SkillMemoryConfig | null,
     output: { output?: unknown },
-): void {
+): Promise<void> {
     if (typeof output.output !== "string" || output.output.length === 0) return;
 
     // Delegate to shared recall core (also used by ctx_skill_recall tool)
-    const block = recallSkillMemoryBlock(db, {
+    const block = await recallSkillMemoryBlock(db, {
         skill: skillId,
         scope: tier,
         projectIdentity,
@@ -644,7 +644,7 @@ export function createToolExecuteAfterHook(args: {
                                 args.sessionDirectoryBySession.get(typedInput.sessionID) ??
                                 args.defaultDirectory;
                             const projectIdentity = resolveProjectIdentity(sessionDir);
-                            maybeInjectSkillMemory(
+                            await maybeInjectSkillMemory(
                                 args.db,
                                 skillId,
                                 registryEntry.tier,
