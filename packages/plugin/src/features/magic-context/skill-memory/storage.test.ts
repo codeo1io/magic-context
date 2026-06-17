@@ -1,16 +1,20 @@
 import { describe, expect, test } from "bun:test";
 import { Database } from "../../../shared/sqlite";
 import { closeQuietly } from "../../../shared/sqlite-helpers";
+import { float32ArrayToBlob } from "../memory/storage-memory-embeddings";
 import { runMigrations } from "../migrations";
 import { initializeDatabase } from "../storage-db";
-import { float32ArrayToBlob } from "../memory/storage-memory-embeddings";
 import {
     bumpHitCount,
     bumpHitCountById,
+    getDedupCandidates,
+    getPinnedNotes,
+    getRankingCandidates,
     getSkillMemoryNotes,
     getSkillMemoryStats,
     type InsertSkillMemoryNoteArgs,
     insertSkillMemoryNote,
+    searchSkillMemoryFts,
 } from "./storage";
 
 function makeDb(): Database {
@@ -273,10 +277,12 @@ describe("skill_memory storage", () => {
         try {
             const ts = 1_000_000;
             const ins = (hash: string, hits: number) =>
-                db.prepare(
-                    `INSERT INTO skill_memory (skill_id,resolved_path,tier,project_identity,intent,kind,delta,normalized_hash,hit_count,pinned,created_at,last_used_at)
+                db
+                    .prepare(
+                        `INSERT INTO skill_memory (skill_id,resolved_path,tier,project_identity,intent,kind,delta,normalized_hash,hit_count,pinned,created_at,last_used_at)
                      VALUES ('s','/p','global','git:x','i','fix','d',?,?,0,?,?)`,
-                ).run(hash, hits, ts, ts);
+                    )
+                    .run(hash, hits, ts, ts);
             ins("a", 1);
             ins("b", 5);
             const notes = getSkillMemoryNotes(db, "s", "global", "git:x", 10);
@@ -293,6 +299,122 @@ describe("skill_memory storage", () => {
             expect(stats.totalNotes).toBe(0);
             expect(stats.skillsWithNotes).toBe(0);
             expect(stats.pinnedNotes).toBe(0);
+        } finally {
+            closeQuietly(db);
+        }
+    });
+
+    test("getDedupCandidates returns top-N same-scope rows with delta_embedding + model version", () => {
+        const db = makeDb();
+        try {
+            insertSkillMemoryNote(db, {
+                skillId: "s",
+                resolvedPath: "/p",
+                tier: "global",
+                skillSource: null,
+                projectIdentity: "git:x",
+                intent: "i",
+                kind: "fix",
+                delta: "d1",
+                normalizedHash: "dedup-h1",
+                createdAt: 1,
+                deltaEmbedding: float32ArrayToBlob(new Float32Array([1, 0])),
+                embeddingModelVersion: "m1",
+            });
+            const cands = getDedupCandidates(db, "s", "global", "git:x", 200);
+            expect(cands.length).toBe(1);
+            expect(cands[0].delta_embedding).toBeTruthy();
+        } finally {
+            closeQuietly(db);
+        }
+    });
+
+    test("getRankingCandidates returns scope-filtered rows ordered by recency", () => {
+        const db = makeDb();
+        try {
+            insertSkillMemoryNote(db, {
+                skillId: "s",
+                resolvedPath: "/p",
+                tier: "global",
+                skillSource: null,
+                projectIdentity: "git:x",
+                intent: "i",
+                kind: "fix",
+                delta: "d",
+                normalizedHash: "rank-h1",
+                createdAt: 1,
+            });
+            const cands = getRankingCandidates(db, "s", "global", "git:x", 10);
+            expect(cands.length).toBe(1);
+            expect(cands[0].skill_id).toBe("s");
+        } finally {
+            closeQuietly(db);
+        }
+    });
+
+    test("searchSkillMemoryFts returns scope-filtered BM25 matches", () => {
+        const db = makeDb();
+        try {
+            insertSkillMemoryNote(db, {
+                skillId: "s",
+                resolvedPath: "/p",
+                tier: "global",
+                skillSource: null,
+                projectIdentity: "git:x",
+                intent: "fix flaky auth test",
+                kind: "fix",
+                delta: "mock Date.now",
+                normalizedHash: "fts-h1",
+                createdAt: 1,
+            });
+            insertSkillMemoryNote(db, {
+                skillId: "OTHER",
+                resolvedPath: "/p",
+                tier: "global",
+                skillSource: null,
+                projectIdentity: "git:x",
+                intent: "auth",
+                kind: "fix",
+                delta: "x",
+                normalizedHash: "fts-h2",
+                createdAt: 1,
+            });
+            const hits = searchSkillMemoryFts(db, "s", "global", "git:x", '"auth"', 10);
+            expect(hits.every((h) => h.skill_id === "s")).toBe(true);
+            expect(hits.length).toBe(1);
+        } finally {
+            closeQuietly(db);
+        }
+    });
+
+    test("getPinnedNotes returns only pinned same-scope rows", () => {
+        const db = makeDb();
+        try {
+            insertSkillMemoryNote(db, {
+                skillId: "s",
+                resolvedPath: "/p",
+                tier: "global",
+                skillSource: null,
+                projectIdentity: "git:x",
+                intent: "i",
+                kind: "fix",
+                delta: "unpinned",
+                normalizedHash: "pin-h1",
+                createdAt: 1,
+            });
+            const pid = Number(
+                (
+                    db
+                        .prepare(
+                            `INSERT INTO skill_memory (skill_id,resolved_path,tier,project_identity,intent,kind,delta,normalized_hash,hit_count,pinned,created_at)
+                         VALUES ('s','/p','global','git:x','i','fix','pinned','pin-h2',0,1,2) RETURNING id`,
+                        )
+                        .get() as { id: number }
+                ).id,
+            );
+            const pinned = getPinnedNotes(db, "s", "global", "git:x");
+            expect(pinned.length).toBe(1);
+            expect(pinned[0].id).toBe(pid);
         } finally {
             closeQuietly(db);
         }

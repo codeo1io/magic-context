@@ -187,6 +187,75 @@ export function findExistingNote(
  * Used by the ctx-status / TUI status dialog (mirrors the external-memory
  * status surface). Sync, single query; safe to call on every status poll.
  */
+export function getDedupCandidates(
+    db: Database,
+    skillId: string,
+    tier: "project" | "global",
+    projectIdentity: string,
+    limit: number,
+): Array<Pick<SkillMemoryNote, "id" | "delta_embedding" | "embedding_model_version">> {
+    return db
+        .prepare(
+            `SELECT id, delta_embedding, embedding_model_version FROM skill_memory
+         WHERE skill_id=? AND tier=? AND project_identity=?
+         ORDER BY COALESCE(last_used_at, created_at) DESC LIMIT ?`,
+        )
+        .all(skillId, tier, projectIdentity, limit) as Array<
+        Pick<SkillMemoryNote, "id" | "delta_embedding" | "embedding_model_version">
+    >;
+}
+
+export function getRankingCandidates(
+    db: Database,
+    skillId: string,
+    tier: "project" | "global",
+    projectIdentity: string,
+    limit: number,
+): SkillMemoryNote[] {
+    return db
+        .prepare(
+            `SELECT * FROM skill_memory
+         WHERE skill_id=? AND tier=? AND project_identity=?
+         ORDER BY COALESCE(last_used_at, created_at) DESC LIMIT ?`,
+        )
+        .all(skillId, tier, projectIdentity, limit) as SkillMemoryNote[];
+}
+
+export function searchSkillMemoryFts(
+    db: Database,
+    skillId: string,
+    tier: "project" | "global",
+    projectIdentity: string,
+    matchQuery: string,
+    limit: number,
+): SkillMemoryNote[] {
+    return db
+        .prepare(
+            `SELECT m.* FROM skill_memory_fts f
+         JOIN skill_memory m ON m.id = f.rowid
+         WHERE skill_memory_fts MATCH ?
+           AND m.skill_id=? AND m.tier=? AND m.project_identity=?
+         ORDER BY bm25(skill_memory_fts) ASC, COALESCE(m.last_used_at, m.created_at) DESC
+         LIMIT ?`,
+        )
+        .all(matchQuery, skillId, tier, projectIdentity, limit) as SkillMemoryNote[];
+}
+
+export function getPinnedNotes(
+    db: Database,
+    skillId: string,
+    tier: "project" | "global",
+    projectIdentity: string,
+): SkillMemoryNote[] {
+    return db
+        .prepare(
+            `SELECT * FROM skill_memory
+         WHERE skill_id=? AND tier=? AND project_identity=? AND pinned=1
+         ORDER BY COALESCE(last_used_at, created_at) DESC`,
+        )
+        .all(skillId, tier, projectIdentity) as SkillMemoryNote[];
+}
+
 export function getSkillMemoryStats(
     db: Database,
     projectIdentity: string,
