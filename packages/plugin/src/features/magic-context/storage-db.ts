@@ -36,7 +36,7 @@ export function getSchemaFenceRejection(): {
     return lastSchemaFenceRejection;
 }
 
-export const LATEST_SUPPORTED_VERSION = 37;
+export const LATEST_SUPPORTED_VERSION = 39;
 
 export interface OpenDatabaseOptions {
     dbPath?: string;
