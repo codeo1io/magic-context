@@ -13,6 +13,7 @@ import { Database } from "../../../shared/sqlite";
 import { closeQuietly } from "../../../shared/sqlite-helpers";
 import { runKeyFilesTask } from "../key-files/identify-key-files";
 import { getMemoryCountsByStatus } from "../memory/storage-memory";
+import { reembedStaleSkillNotes } from "../skill-memory/reembed";
 import { getPendingSmartNotes, markNoteChecked, markNoteReady } from "../storage-notes";
 import { recordChildInvocation } from "../subagent-token-capture";
 import { reviewUserMemories } from "../user-memory/review-user-memories";
@@ -339,6 +340,10 @@ export async function runDream(args: {
                               content: um.content,
                           }))
                         : undefined;
+
+                if (taskName === "distill-skill-memory") {
+                    await reembedStaleSkillNotes(args.db, args.projectIdentity);
+                }
 
                 const taskPrompt = buildDreamTaskPrompt(taskName, {
                     projectPath: args.projectIdentity,

@@ -34,7 +34,7 @@ function columnExists(db: Database, table: string, column: string): boolean {
     return rows.some((row) => row.name === column);
 }
 
-const MIGRATIONS: Migration[] = [
+export const MIGRATIONS: Migration[] = [
     {
         version: 1,
         description: "Merge session_notes + smart_notes into unified notes table",
@@ -1500,6 +1500,45 @@ const MIGRATIONS: Migration[] = [
             // <external-memory> delta comparison. No cache-clear needed: the
             // cachedRowMatchesState comparison normalizes NULL and '' to equal.
             ensureColumn(db, "session_meta", "cached_m0_external_recall_hash", "TEXT");
+        },
+    },
+    {
+        version: 39,
+        description: "Skill-memory P2: delta_embedding column + skill_memory_fts FTS5 vtable",
+        up: (db: Database) => {
+            // skill_memory is migration-only (created by v37); ALTER is safe here.
+            if (!columnExists(db, "skill_memory", "delta_embedding")) {
+                db.exec(`ALTER TABLE skill_memory ADD COLUMN delta_embedding BLOB;`);
+            }
+
+            // FTS5 over (intent, delta), content-linked to skill_memory — mirrors memories_fts.
+            db.exec(`
+                CREATE VIRTUAL TABLE IF NOT EXISTS skill_memory_fts USING fts5(
+                  intent,
+                  delta,
+                  content='skill_memory',
+                  content_rowid='id',
+                  tokenize='porter unicode61'
+                );
+
+                CREATE TRIGGER IF NOT EXISTS skill_memory_ai AFTER INSERT ON skill_memory BEGIN
+                  INSERT INTO skill_memory_fts(rowid, intent, delta) VALUES (new.id, new.intent, new.delta);
+                END;
+
+                CREATE TRIGGER IF NOT EXISTS skill_memory_ad AFTER DELETE ON skill_memory BEGIN
+                  INSERT INTO skill_memory_fts(skill_memory_fts, rowid, intent, delta) VALUES ('delete', old.id, old.intent, old.delta);
+                END;
+
+                CREATE TRIGGER IF NOT EXISTS skill_memory_au AFTER UPDATE ON skill_memory BEGIN
+                  INSERT INTO skill_memory_fts(skill_memory_fts, rowid, intent, delta) VALUES ('delete', old.id, old.intent, old.delta);
+                  INSERT INTO skill_memory_fts(rowid, intent, delta) VALUES (new.id, new.intent, new.delta);
+                END;
+            `);
+
+            // Backfill the FTS index for any existing skill_memory rows. External-content FTS5 tables
+            // expose content rowids immediately, so a `NOT IN (SELECT rowid FROM …_fts)` guard is a no-op;
+            // the 'rebuild' command is the correct way to (re)populate an external-content index.
+            db.exec(`INSERT INTO skill_memory_fts(skill_memory_fts) VALUES('rebuild');`);
         },
     },
 ];

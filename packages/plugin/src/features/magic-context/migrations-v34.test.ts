@@ -78,13 +78,13 @@ describe("migration v34/v35 — workspaces", () => {
             expect(
                 db.prepare("SELECT share_categories FROM workspaces WHERE name = 'fresh'").get(),
             ).toEqual({ share_categories: '["CONSTRAINTS"]' });
-            expect(LATEST_SUPPORTED_VERSION).toBe(38);
-            expect(LATEST_MIGRATION_VERSION).toBe(38);
+            expect(LATEST_SUPPORTED_VERSION).toBe(39);
+            expect(LATEST_MIGRATION_VERSION).toBe(39);
             expect(
                 db
                     .prepare("SELECT version FROM schema_migrations ORDER BY version DESC LIMIT 1")
                     .get(),
-            ).toEqual({ version: 38 });
+            ).toEqual({ version: 39 });
         } finally {
             closeQuietly(db);
         }
@@ -215,7 +215,7 @@ describe("migration v34/v35 — workspaces", () => {
                 db
                     .prepare("SELECT version FROM schema_migrations ORDER BY version DESC LIMIT 1")
                     .get(),
-            ).toEqual({ version: 38 });
+            ).toEqual({ version: 39 });
         } finally {
             closeQuietly(db);
         }

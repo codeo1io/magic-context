@@ -2,6 +2,7 @@
 
 import { describe, expect, test } from "bun:test";
 import { runMigrations } from "../../features/magic-context/migrations";
+import { insertSkillMemoryNote } from "../../features/magic-context/skill-memory/storage";
 import { initializeDatabase } from "../../features/magic-context/storage-db";
 import {
     getOrCreateSessionMeta,
@@ -13,7 +14,11 @@ import {
 } from "../../features/magic-context/storage-meta-persisted";
 import { Database } from "../../shared/sqlite";
 import { closeQuietly } from "../../shared/sqlite-helpers";
-import { createEventHook, createToolExecuteAfterHook } from "./hook-handlers";
+import {
+    createEventHook,
+    createToolExecuteAfterHook,
+    maybeInjectSkillMemory,
+} from "./hook-handlers";
 
 function createTestDb(): Database {
     const db = new Database(":memory:");
@@ -22,10 +27,21 @@ function createTestDb(): Database {
     return db;
 }
 
+const CFG = {
+    enabled: true as const,
+    max_tokens: 1500,
+    max_pinned_tokens: 4000,
+    dedup_threshold: 0.92,
+};
+
 function createTestHook(db: Database): ReturnType<typeof createToolExecuteAfterHook> {
     return createToolExecuteAfterHook({
         db,
         channel1StateBySession: new Map(),
+        skillLoadRegistry: new Map(),
+        sessionDirectoryBySession: new Map(),
+        defaultDirectory: "/tmp/test",
+        intentByCallId: new Map(),
     });
 }
 
@@ -230,6 +246,34 @@ describe("createEventHook mid-session model switch clears overflow state", () =>
             const overflow = getOverflowState(db, sessionId);
             expect(overflow.detectedContextLimit).toBe(120_000);
             expect(overflow.needsEmergencyRecovery).toBe(true);
+        } finally {
+            closeQuietly(db);
+        }
+    });
+});
+
+describe("maybeInjectSkillMemory intent threading", () => {
+    test("maybeInjectSkillMemory threads intent → FTS rung (vs no-intent without it)", async () => {
+        const db = createTestDb();
+        try {
+            insertSkillMemoryNote(db, {
+                skillId: "tdd",
+                resolvedPath: "/p/SKILL.md",
+                tier: "global",
+                skillSource: "opencode-global",
+                projectIdentity: "git:abc",
+                intent: "fix the auth flake",
+                kind: "fix",
+                delta: "stub the clock",
+                normalizedHash: "h1",
+                createdAt: Date.now(),
+            });
+            const withIntent = { output: "# tool result" };
+            await maybeInjectSkillMemory(db, "tdd", "global", "git:abc", CFG, withIntent, "auth");
+            expect(withIntent.output).toContain('mode="fts5-fallback"');
+            const noIntent = { output: "# tool result" };
+            await maybeInjectSkillMemory(db, "tdd", "global", "git:abc", CFG, noIntent, undefined);
+            expect(noIntent.output).toContain('mode="no-intent"');
         } finally {
             closeQuietly(db);
         }
