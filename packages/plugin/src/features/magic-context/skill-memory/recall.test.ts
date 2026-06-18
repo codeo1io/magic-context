@@ -70,10 +70,10 @@ describe("flatRecall", () => {
 describe("sanitizeSkillIntentForFts", () => {
     test("quotes tokens and neutralizes FTS operators", () => {
         expect(sanitizeSkillIntentForFts("debug AND fix (urgent)")).toBe(
-            '"debug" "and" "fix" "urgent"',
+            '"debug" OR "and" OR "fix" OR "urgent"',
         );
         expect(sanitizeSkillIntentForFts("!!!")).toBe("");
-        expect(sanitizeSkillIntentForFts('say "hi"')).toBe('"say" "hi"');
+        expect(sanitizeSkillIntentForFts('say "hi"')).toBe('"say" OR "hi"');
     });
 });
 
@@ -282,6 +282,52 @@ describe("recallSkillMemoryBlock (intent-scoped rungs)", () => {
             frontmatterConfig: cfg,
         });
         expect(modeOf(block)).toBe("fts5-fallback");
+    });
+
+    test("intent-scoped recall matches a note sharing SOME (not all) intent tokens (OR semantics)", async () => {
+        const db = makeDb();
+        EMBED_UP = false; // force rung 3 FTS path
+        try {
+            insertSkillMemoryNote(db, {
+                skillId: "tdd",
+                resolvedPath: "/p/SKILL.md",
+                tier: "global",
+                skillSource: null,
+                projectIdentity: "git:abc",
+                intent: "fix the flaky auth login test",
+                kind: "fix",
+                delta: "mock the system clock in auth specs",
+                normalizedHash: "h1",
+                createdAt: Date.now(),
+            });
+            insertSkillMemoryNote(db, {
+                skillId: "tdd",
+                resolvedPath: "/p/SKILL.md",
+                tier: "global",
+                skillSource: null,
+                projectIdentity: "git:abc",
+                intent: "speed up the docker build cache",
+                kind: "discovery",
+                delta: "layer ordering matters",
+                normalizedHash: "h2",
+                createdAt: Date.now(),
+            });
+            // A multi-token NL intent that shares SOME tokens with note 1 (auth, test) but NOT all —
+            // under AND-join this matches ZERO notes (the bug); under OR-join + bm25 it returns note 1.
+            const block = await recallSkillMemoryBlock(db, {
+                skill: "tdd",
+                intent: "auth test timing clock stabilization",
+                scope: "global",
+                projectIdentity: "git:abc",
+                frontmatterConfig: cfg,
+            });
+            expect(block).not.toBe(""); // RED with AND (empty), GREEN with OR
+            expect(block).toContain('mode="fts5-fallback"'); // proves rung-3 path
+            expect(block).toContain("mock the system clock"); // note 1's delta — the relevant note surfaced
+            expect(block).not.toContain("layer ordering"); // note 2 (docker) shares no tokens → not matched
+        } finally {
+            closeQuietly(db);
+        }
     });
 
     test("pinned notes appear even when intent doesn't match them (M2)", async () => {
