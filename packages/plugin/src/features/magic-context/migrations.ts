@@ -1476,11 +1476,21 @@ export const MIGRATIONS: Migration[] = [
 
     {
         version: 39,
-        description: "Skill-memory P2: delta_embedding column + skill_memory_fts FTS5 vtable",
+        description:
+            "Skill-memory P2: delta_embedding + recall_count columns + skill_memory_fts FTS5 vtable",
         up: (db: Database) => {
             // skill_memory is migration-only (created by v37); ALTER is safe here.
             if (!columnExists(db, "skill_memory", "delta_embedding")) {
                 db.exec(`ALTER TABLE skill_memory ADD COLUMN delta_embedding BLOB;`);
+            }
+
+            // recall_count: read-side usage counter, bumped each time a note is surfaced
+            // in a recall block (distinct from hit_count, which is write-side re-record salience).
+            // Answers "which notes are recalled most". NOT_NULL+DEFAULT is valid in ALTER ADD COLUMN.
+            if (!columnExists(db, "skill_memory", "recall_count")) {
+                db.exec(
+                    `ALTER TABLE skill_memory ADD COLUMN recall_count INTEGER NOT NULL DEFAULT 0;`,
+                );
             }
 
             // FTS5 over (intent, delta), content-linked to skill_memory — mirrors memories_fts.

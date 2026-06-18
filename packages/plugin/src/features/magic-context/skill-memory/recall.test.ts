@@ -380,6 +380,7 @@ describe("buildSkillMemoryBlock", () => {
                 delta: "Always mock the clock",
                 intent: "fix flaky test",
                 hit_count: 3,
+                recall_count: 0,
                 pinned: 0,
                 normalized_hash: "h1",
                 created_at: Date.now(),
@@ -400,5 +401,65 @@ describe("buildSkillMemoryBlock", () => {
         expect(block).toContain('kind="gotcha"');
         expect(block).toContain("Always mock the clock");
         expect(block).toContain("ctx_skill_note");
+    });
+});
+
+describe("recallSkillMemoryBlock bumps recall_count for surfaced notes", () => {
+    test("a surfaced note's recall_count increments per recall (no-intent rung)", async () => {
+        const db = makeDb();
+        try {
+            insertSkillMemoryNote(db, {
+                skillId: "tdd",
+                resolvedPath: "/p/SKILL.md",
+                tier: "global",
+                skillSource: "opencode-global",
+                projectIdentity: "git:abc",
+                intent: "fix a flaky test",
+                kind: "fix",
+                delta: "mock the clock",
+                normalizedHash: "rc1",
+                createdAt: Date.now(),
+            });
+            const cfg = { enabled: true, max_tokens: 1500, max_pinned_tokens: 4000 };
+            // Two recalls (no intent → rung 2, which surfaces the note both times).
+            const b1 = await recallSkillMemoryBlock(db, {
+                skill: "tdd",
+                scope: "global",
+                projectIdentity: "git:abc",
+                frontmatterConfig: cfg,
+            });
+            const b2 = await recallSkillMemoryBlock(db, {
+                skill: "tdd",
+                scope: "global",
+                projectIdentity: "git:abc",
+                frontmatterConfig: cfg,
+            });
+            expect(b1).toContain("mock the clock");
+            expect(b2).toContain("mock the clock");
+            const row = db
+                .prepare(
+                    "SELECT recall_count, last_used_at FROM skill_memory WHERE normalized_hash='rc1'",
+                )
+                .get() as { recall_count: number; last_used_at: number | null };
+            expect(row.recall_count).toBe(2); // bumped once per recall
+            expect(row.last_used_at).toBeNull(); // recall must NOT touch recency
+        } finally {
+            closeQuietly(db);
+        }
+    });
+
+    test("a cold-start recall (no notes) bumps nothing and returns empty", async () => {
+        const db = makeDb();
+        try {
+            const block = await recallSkillMemoryBlock(db, {
+                skill: "ghost",
+                scope: "global",
+                projectIdentity: "git:abc",
+                frontmatterConfig: { enabled: true, max_tokens: 1500, max_pinned_tokens: 4000 },
+            });
+            expect(block).toBe("");
+        } finally {
+            closeQuietly(db);
+        }
     });
 });

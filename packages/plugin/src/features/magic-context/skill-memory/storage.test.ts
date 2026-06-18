@@ -7,6 +7,7 @@ import { initializeDatabase } from "../storage-db";
 import {
     bumpHitCount,
     bumpHitCountById,
+    bumpRecallCountByIds,
     getDedupCandidates,
     getPinnedNotes,
     getRankingCandidates,
@@ -185,6 +186,63 @@ describe("skill_memory storage", () => {
             const notes = getSkillMemoryNotes(db, "tdd", "global", "git:abc", 10);
             expect(notes[0].hit_count).toBe(2);
             expect(notes[0].last_used_at).not.toBeNull();
+        } finally {
+            closeQuietly(db);
+        }
+    });
+
+    test("bumpRecallCountByIds increments recall_count without touching last_used_at or hit_count", () => {
+        const db = makeDb();
+        try {
+            const mkId = (hash: string): number =>
+                insertSkillMemoryNote(db, {
+                    skillId: "tdd",
+                    resolvedPath: "/p",
+                    tier: "global",
+                    skillSource: "opencode-global",
+                    projectIdentity: "git:abc",
+                    intent: "i",
+                    kind: "fix",
+                    delta: `d-${hash}`,
+                    normalizedHash: hash,
+                    createdAt: Date.now(),
+                }) as number;
+            const id1 = mkId("r1");
+            const id2 = mkId("r2");
+            const id3 = mkId("r3");
+
+            // Surface only id1 + id2 twice; id3 never recalled.
+            bumpRecallCountByIds(db, [id1, id2]);
+            bumpRecallCountByIds(db, [id1, id2]);
+
+            const rows = db
+                .prepare(
+                    "SELECT id, recall_count, hit_count, last_used_at FROM skill_memory ORDER BY id",
+                )
+                .all() as Array<{
+                id: number;
+                recall_count: number;
+                hit_count: number;
+                last_used_at: number | null;
+            }>;
+            const byId = new Map(rows.map((r) => [r.id, r]));
+            expect(byId.get(id1)?.recall_count).toBe(2);
+            expect(byId.get(id2)?.recall_count).toBe(2);
+            expect(byId.get(id3)?.recall_count).toBe(0);
+            // read-counter must NOT pollute write-side salience or recency
+            expect(byId.get(id1)?.hit_count).toBe(0);
+            expect(byId.get(id1)?.last_used_at).toBeNull();
+        } finally {
+            closeQuietly(db);
+        }
+    });
+
+    test("bumpRecallCountByIds is a no-op on empty ids", () => {
+        const db = makeDb();
+        try {
+            // must not throw
+            bumpRecallCountByIds(db, []);
+            expect(true).toBe(true);
         } finally {
             closeQuietly(db);
         }
