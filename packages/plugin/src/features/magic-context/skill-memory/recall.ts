@@ -45,7 +45,7 @@ export function flatRecall(
 /** Escape a natural-language intent into a safe FTS5 MATCH query: quote each alphanumeric token. */
 export function sanitizeSkillIntentForFts(intent: string): string {
     const tokens = intent.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? [];
-    return tokens.map((t) => `"${t.replace(/"/g, '""')}"`).join(" ");
+    return tokens.map((t) => `"${t.replace(/"/g, '""')}"`).join(" OR ");
 }
 
 export interface Rung1Note {
