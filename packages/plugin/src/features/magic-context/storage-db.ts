@@ -240,17 +240,80 @@ export function runSqliteOptimize(db: Database): void {
     }
 }
 
+// Cold-start busy timeout. Two plugin processes (OpenCode + Pi, or two
+// OpenCode instances) can open the same context.db at once. The connection
+// MUST have a busy_timeout in place before any write-locking PRAGMA
+// (journal_mode=WAL, CREATE TABLE) or SQLite returns SQLITE_BUSY immediately
+// and the plugin disables itself for the run. Reused by openDatabase() so the
+// very first PRAGMA on a fresh connection is busy_timeout, before
+// enforceSchemaFence / initializeDatabase run.
+const BUSY_TIMEOUT_MS = 5000;
+
+// Cold-open retry tuning. The busy_timeout handles short lock contention;
+// these cover the case where a sibling holds the writer lock for several
+// seconds (large migration, long dreamer run). Three attempts at 250ms
+// apart adds at most ~750ms to startup in the worst recoverable case, and
+// avoids disabling Magic Context for the entire process lifetime.
+const COLD_OPEN_MAX_ATTEMPTS = 3;
+const COLD_OPEN_BACKOFF_MS = 250;
+
+function isColdOpenRetryable(error: unknown): boolean {
+    if (!error || typeof error !== "object") return false;
+    const e = error as { code?: unknown; message?: unknown };
+    if (typeof e.code === "string") {
+        if (e.code === "SQLITE_BUSY" || e.code === "SQLITE_LOCKED") return true;
+        if (e.code === "SQLITE_BUSY_SNAPSHOT" || e.code === "SQLITE_BUSY_RECOVERY") return true;
+    }
+    if (typeof e.message === "string") {
+        if (/database is locked/i.test(e.message)) return true;
+        if (/sqlite_(busy|locked)/i.test(e.message)) return true;
+    }
+    return false;
+}
+
+// Synchronous sleep — better-sqlite3 / bun:sqlite / node:sqlite are all
+// synchronous APIs, so we block the caller briefly between attempts. The
+// cold-open path runs once per process boot, so a few hundred ms of blocking
+// is acceptable and far cheaper than disabling Magic Context for the run.
+function awaitSleep(ms: number): void {
+    const start = Date.now();
+    while (Date.now() - start < ms) {
+        // Spin-wait; the durations are tiny and Atomics.wait would require a
+        // worker just for this one-shot cold path.
+    }
+}
+
+// Close any Database handles in the module cache. Used between cold-open
+// retries so each attempt starts from a clean handle (the prior attempt may
+// have opened a connection that's now in a weird state).
+function closeOpenHandlesSafe(): void {
+    for (const [, db] of databases) {
+        try {
+            closeQuietly(db);
+        } catch {
+            // ignore
+        }
+    }
+    databases.clear();
+}
+
 export function initializeDatabase(db: Database): void {
     // Install the busy timeout BEFORE any file-level PRAGMAs like WAL. Two
     // processes can cold-open the same DB at once (real OpenCode/Pi startup, or
     // the subprocess lease tests); without the timeout this connection can throw
     // SQLITE_BUSY immediately while the sibling is switching journal mode.
-    db.exec("PRAGMA busy_timeout=5000");
+    db.exec(`PRAGMA busy_timeout=${BUSY_TIMEOUT_MS}`);
     // SQLite per-connection PRAGMAs. foreign_keys MUST run before any reads
     // or writes: it defaults to OFF, which silently breaks every ON DELETE
     // CASCADE / SET NULL declared in the schema below and in migrations.
     db.exec("PRAGMA foreign_keys=ON");
     db.exec("PRAGMA journal_mode=WAL");
+    // Auto-checkpoint the WAL so it doesn't grow unbounded under sustained
+    // concurrent writes (observed: 40MB+ WAL on long-running multi-process
+    // installs, which amplifies BUSY windows because checkpoint passes hold
+    // the write lock). PASSIVE never blocks; SQLite's default (1000 pages)
+    // is fine. Set explicitly so future tuning lives in one place.
+    db.exec("PRAGMA wal_autocheckpoint=1000");
     applySqliteTuningPragmas(db);
     db.exec(`
     CREATE TABLE IF NOT EXISTS tags (
@@ -1349,20 +1412,70 @@ export function openDatabase(dbPathOrOptions?: string | OpenDatabaseOptions): Da
         }
         mkdirSync(dbDir, { recursive: true });
 
-        const db = new Database(dbPath);
-        if (!enforceSchemaFence(db, dbPath, latestSupportedVersion)) {
-            closeQuietly(db);
-            return null;
+        // Cold-open the shared DB. Even with busy_timeout installed first,
+        // a long-running sibling transaction (large migration, dreamer run,
+        // Channel-2 bulk delivery) can hold the WAL writer lock past the
+        // timeout. The open itself is cheap and idempotent, so retry the
+        // whole sequence a few times with backoff before fail-closing. This
+        // is the difference between "plugin disabled for this run" on every
+        // cold start under load and a brief wait that almost always recovers.
+        let lastError: unknown;
+        let db: Database | null = null;
+        for (let attempt = 0; attempt < COLD_OPEN_MAX_ATTEMPTS; attempt += 1) {
+            try {
+                const candidate = new Database(dbPath);
+                // Install the busy timeout BEFORE any other PRAGMA or query.
+                // Cold opening the shared context.db races with sibling
+                // OpenCode/Pi processes that may already hold the WAL writer
+                // lock (mid-migration, dreamer lease, Channel-2 delivery).
+                // Without this, the very next write-locking operation
+                // (CREATE TABLE in initializeDatabase, or PRAGMA
+                // journal_mode=WAL) throws SQLITE_BUSY immediately and the
+                // plugin disables itself for the whole run — the root cause
+                // of the recurring "failed to load plugin ... database is
+                // locked" errors. initializeDatabase re-runs the same PRAGMA
+                // (idempotent), so the value is consistent across the
+                // connection's lifetime.
+                candidate.exec(`PRAGMA busy_timeout=${BUSY_TIMEOUT_MS}`);
+                if (!enforceSchemaFence(candidate, dbPath, latestSupportedVersion)) {
+                    closeQuietly(candidate);
+                    return null;
+                }
+                initializeDatabase(candidate);
+                runMigrations(candidate);
+                if (!enforceSchemaFence(candidate, dbPath, latestSupportedVersion)) {
+                    closeQuietly(candidate);
+                    return null;
+                }
+                db = candidate;
+                break;
+            } catch (error) {
+                lastError = error;
+                if (!isColdOpenRetryable(error) || attempt === COLD_OPEN_MAX_ATTEMPTS - 1) {
+                    break;
+                }
+                log(
+                    `[magic-context] storage open attempt ${attempt + 1}/${COLD_OPEN_MAX_ATTEMPTS} hit transient lock; retrying in ${COLD_OPEN_BACKOFF_MS}ms: ${getErrorMessage(error)}`,
+                );
+                // Close any half-open handle before sleeping so we don't
+                // leak FDs across retries.
+                closeOpenHandlesSafe();
+                awaitSleep(COLD_OPEN_BACKOFF_MS);
+            }
         }
-        initializeDatabase(db);
-        runMigrations(db);
-        if (!enforceSchemaFence(db, dbPath, latestSupportedVersion)) {
-            closeQuietly(db);
-            return null;
+        if (!db) {
+            const detail = getErrorMessage(lastError);
+            log(
+                `[magic-context] storage fatal: failed to open ${dbPath} after ${COLD_OPEN_MAX_ATTEMPTS} attempts: ${detail}`,
+            );
+            throw new Error(
+                `[magic-context] storage unavailable: ${detail}. Magic Context is disabled for this run; check log for details.`,
+            );
         }
+        const database = db;
         if (!explicitDbPath) {
             try {
-                deleteOrphanProjectKeyFiles(db);
+                deleteOrphanProjectKeyFiles(database);
             } catch (error) {
                 log(`[magic-context] key-files orphan GC failed: ${getErrorMessage(error)}`);
             }
@@ -1371,7 +1484,7 @@ export function openDatabase(dbPathOrOptions?: string | OpenDatabaseOptions): Da
         // mid-delivery (see healWedgedChannel2Claims). Fresh opens and later
         // cached-handle reuses both run this TTL-scoped heal so long-lived
         // processes eventually unwind stuck stale claims without a restart.
-        healWedgedChannel2Claims(db);
+        healWedgedChannel2Claims(database);
         // Tool-owner backfill (plan v3.3.1, Layer B). Runs once per
         // boot to populate tool_owner_message_id on legacy tool tags.
         // The backfill module short-circuits when no work is needed
@@ -1384,7 +1497,7 @@ export function openDatabase(dbPathOrOptions?: string | OpenDatabaseOptions): Da
         // any rows the backfill couldn't reach.
         if (!explicitDbPath) {
             try {
-                runToolOwnerBackfill(db);
+                runToolOwnerBackfill(database);
             } catch (error) {
                 log(
                     `[magic-context] tool-owner backfill failed (continuing with lazy adoption fallback): ${getErrorMessage(error)}`,
@@ -1397,12 +1510,12 @@ export function openDatabase(dbPathOrOptions?: string | OpenDatabaseOptions): Da
         // `tool_definition_measurements` table, so loadToolDefinitionMeasurements
         // never hits a missing-table failure path. See bug #2 in the v0.16+
         // sidebar regression report.
-        setToolDefinitionDatabase(db);
-        loadToolDefinitionMeasurements(db);
-        databases.set(dbPath, db);
-        persistenceByDatabase.set(db, true);
-        persistenceErrorByDatabase.delete(db);
-        return db;
+        setToolDefinitionDatabase(database);
+        loadToolDefinitionMeasurements(database);
+        databases.set(dbPath, database);
+        persistenceByDatabase.set(database, true);
+        persistenceErrorByDatabase.delete(database);
+        return database;
     } catch (error) {
         const detail = getErrorMessage(error);
         log(`[magic-context] storage fatal: failed to open ${dbPath}: ${detail}`);
