@@ -15,6 +15,7 @@ export interface SkillMemoryNote {
     delta: string;
     tags: string | null;
     hit_count: number;
+    recall_count: number;
     pinned: number;
     normalized_hash: string;
     created_at: number;
@@ -156,6 +157,26 @@ export function bumpHitCountById(db: Database, id: number): void {
     db.prepare(
         `UPDATE skill_memory SET hit_count = hit_count + 1, last_used_at = ? WHERE id = ?`,
     ).run(Date.now(), id);
+}
+
+/**
+ * Bump recall_count for notes actually surfaced in a recall block (read-side usage).
+ * Distinct from hit_count (write-side re-record salience): recall_count answers
+ * "which notes are recalled most". Deliberately does NOT touch last_used_at — the
+ * ranking's recency term must reflect when a lesson was learned/re-recorded, not when
+ * it was surfaced, else surfaced notes would always win recency and starve new notes.
+ * Best-effort, no-throw: a counter write must never break recall.
+ */
+export function bumpRecallCountByIds(db: Database, ids: number[]): void {
+    if (ids.length === 0) return;
+    try {
+        const placeholders = ids.map(() => "?").join(",");
+        db.prepare(
+            `UPDATE skill_memory SET recall_count = recall_count + 1 WHERE id IN (${placeholders})`,
+        ).run(...ids);
+    } catch {
+        // never let usage-tracking break a recall
+    }
 }
 
 /**

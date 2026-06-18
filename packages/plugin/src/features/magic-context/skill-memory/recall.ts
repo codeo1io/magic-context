@@ -4,6 +4,7 @@ import { embedTextForProject } from "../memory/embedding";
 import { toFloat32Array } from "../memory/storage-memory-embeddings";
 import type { SkillMemoryConfig } from "./frontmatter";
 import {
+    bumpRecallCountByIds,
     getPinnedNotes,
     getRankingCandidates,
     getSkillMemoryNotes,
@@ -196,20 +197,32 @@ export async function recallSkillMemoryBlock(
         const maxPinned = opts.frontmatterConfig.max_pinned_tokens;
         const intent = opts.intent?.trim();
 
+        // Single chokepoint for every rung: bump read-side recall_count for the notes
+        // actually surfaced, then format the block. Empty selection → empty string (no bump).
+        const finalize = (
+            mode: "no-intent" | "flat-fts" | "full" | "fts5-fallback",
+            notes: SkillMemoryNote[],
+        ): string => {
+            if (notes.length === 0) return "";
+            bumpRecallCountByIds(
+                db,
+                notes.map((n) => n.id),
+            );
+            return buildSkillMemoryBlock(
+                opts.skill,
+                mode,
+                notes,
+                notes.filter((n) => n.pinned === 1).length,
+            );
+        };
+
         // Rung 2: no intent → flat recency×hit (nothing to embed/FTS-match → always "no-intent").
         if (!intent) {
             const notes = flatRecall(db, opts.skill, opts.scope, opts.projectIdentity, {
                 maxTokens,
                 maxPinnedTokens: maxPinned,
             });
-            return notes.length
-                ? buildSkillMemoryBlock(
-                      opts.skill,
-                      "no-intent",
-                      notes,
-                      notes.filter((n) => n.pinned === 1).length,
-                  )
-                : "";
+            return finalize("no-intent", notes);
         }
 
         const q = await embedTextForProject(opts.projectIdentity, intent);
@@ -248,14 +261,7 @@ export async function recallSkillMemoryBlock(
                     rankedNotes,
                 );
                 const selected = budgetFill(ordered, maxTokens, maxPinned);
-                return selected.length
-                    ? buildSkillMemoryBlock(
-                          opts.skill,
-                          "full",
-                          selected,
-                          selected.filter((n) => n.pinned === 1).length,
-                      )
-                    : "";
+                return finalize("full", selected);
             }
             // zero model-matched → fall to FTS rung 3.
         }
@@ -266,14 +272,7 @@ export async function recallSkillMemoryBlock(
                 maxTokens,
                 maxPinnedTokens: maxPinned,
             });
-            return notes.length
-                ? buildSkillMemoryBlock(
-                      opts.skill,
-                      "flat-fts",
-                      notes,
-                      notes.filter((n) => n.pinned === 1).length,
-                  )
-                : "";
+            return finalize("flat-fts", notes);
         }
         const ftsNotes = searchSkillMemoryFts(
             db,
@@ -288,14 +287,7 @@ export async function recallSkillMemoryBlock(
             ftsNotes,
         );
         const selected = budgetFill(ordered, maxTokens, maxPinned);
-        return selected.length
-            ? buildSkillMemoryBlock(
-                  opts.skill,
-                  "fts5-fallback",
-                  selected,
-                  selected.filter((n) => n.pinned === 1).length,
-              )
-            : "";
+        return finalize("fts5-fallback", selected);
     } catch {
         return "";
     }
