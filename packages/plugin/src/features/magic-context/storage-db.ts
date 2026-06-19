@@ -1394,6 +1394,14 @@ export function openDatabase(dbPathOrOptions?: string | OpenDatabaseOptions): Da
         mkdirSync(dbDir, { recursive: true });
 
         const db = new Database(dbPath);
+        // Install busy_timeout IMMEDIATELY after open, before any read. Without
+        // this, enforceSchemaFence()'s schema_migrations read below can throw
+        // SQLITE_BUSY when a sibling process holds the WAL writer lock during a
+        // concurrent cold open (two opencode processes booting at once, or a
+        // child session spawning while the parent is mid-checkpoint). The
+        // busy_timeout set later inside initializeDatabase() is too late for
+        // this first read. See the "database is locked" plugin-load failures.
+        db.exec("PRAGMA busy_timeout=5000");
         if (!enforceSchemaFence(db, dbPath, latestSupportedVersion)) {
             closeQuietly(db);
             return null;

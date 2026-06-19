@@ -59,7 +59,15 @@ let activeTimer: ReturnType<typeof setInterval> | null = null;
  * deep in embedding registration and throws a confusing TypeError.
  */
 function openTimerDatabaseOrNull(context: string): Database | null {
-    const db = openDatabase();
+    let db: Database | null;
+    try {
+        db = openDatabase();
+    } catch (error) {
+        log(
+            `[dreamer] storage open threw; skipping ${context}: ${error instanceof Error ? error.message : String(error)}`,
+        );
+        return null;
+    }
     if (!db) {
         log(
             `[dreamer] storage unavailable; skipping ${context} (the cache schema is newer than this binary supports — restart/upgrade OpenCode/Pi/Magic Context to recover)`,

@@ -209,7 +209,11 @@ const plugin: Plugin = async (ctx) => {
                 : undefined,
             ensureRegistered: ensureProjectRegisteredFromOpenCodeDirectory,
         };
-        stopDreamTimerRegistration = await startDreamScheduleTimer(timerRegistration);
+        try {
+            stopDreamTimerRegistration = await startDreamScheduleTimer(timerRegistration);
+        } catch (err) {
+            log(`[magic-context] dream schedule timer failed to start (non-fatal): ${err}`);
+        }
 
         // Start RPC server for TUI↔server communication (replaces SQLite plugin_messages bus).
         // `storageDir` is hoisted above so the auto-update checker can also use it.
