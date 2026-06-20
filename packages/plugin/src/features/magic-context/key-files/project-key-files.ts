@@ -3,6 +3,7 @@ import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { join, resolve, sep } from "node:path";
 import { log } from "../../../shared/logger";
 import type { Database } from "../../../shared/sqlite";
+import { runWriteTransaction } from "../../../shared/write-transaction";
 
 export type KeyFileStaleReason = "missing" | "content_drift";
 
@@ -140,9 +141,7 @@ export function replaceProjectKeyFiles(
     const generatedByModel = files[0]?.generatedByModel ?? null;
     const configHash = files[0]?.generationConfigHash ?? sha256("{}");
 
-    db.exec("BEGIN IMMEDIATE");
-    let committed = false;
-    try {
+    return runWriteTransaction(db, () => {
         db.prepare("DELETE FROM project_key_files WHERE project_path = ?").run(resolvedProjectPath);
         insertResolvedKeyFiles(
             db,
@@ -152,19 +151,8 @@ export function replaceProjectKeyFiles(
             generatedByModel,
             configHash,
         );
-        const version = bumpKeyFilesVersion(db, resolvedProjectPath);
-        db.exec("COMMIT");
-        committed = true;
-        return version;
-    } finally {
-        if (!committed) {
-            try {
-                db.exec("ROLLBACK");
-            } catch {
-                // no active transaction
-            }
-        }
-    }
+        return bumpKeyFilesVersion(db, resolvedProjectPath);
+    });
 }
 
 export function insertResolvedKeyFiles(

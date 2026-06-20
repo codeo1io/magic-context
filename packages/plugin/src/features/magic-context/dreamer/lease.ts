@@ -1,4 +1,5 @@
 import type { Database } from "../../../shared/sqlite";
+import { runWriteTransaction } from "../../../shared/write-transaction";
 import { deleteDreamState, getDreamState, setDreamState } from "./storage-dream-state";
 
 const LEASE_HOLDER_KEY = "dreaming_lease_holder";
@@ -43,27 +44,9 @@ export function peekLeaseHolderAndExpiry(db: Database, expectedHolder: string): 
 // = false under WAL snapshot isolation and both write — double-acquiring the
 // lease and spawning duplicate dreamer workers. busy_timeout (set in
 // initializeDatabase) makes the loser wait rather than throw SQLITE_BUSY.
-function runImmediate<T>(db: Database, body: () => T): T {
-    db.exec("BEGIN IMMEDIATE");
-    let committed = false;
-    try {
-        const result = body();
-        db.exec("COMMIT");
-        committed = true;
-        return result;
-    } finally {
-        if (!committed) {
-            try {
-                db.exec("ROLLBACK");
-            } catch {
-                // already rolled back / no active transaction
-            }
-        }
-    }
-}
 
 export function acquireLease(db: Database, holderId: string): boolean {
-    return runImmediate(db, () => {
+    return runWriteTransaction(db, () => {
         if (isLeaseActive(db)) {
             const existingHolder = getLeaseHolder(db);
             if (existingHolder && existingHolder !== holderId) {
@@ -80,7 +63,7 @@ export function acquireLease(db: Database, holderId: string): boolean {
 }
 
 export function renewLease(db: Database, holderId: string): boolean {
-    return runImmediate(db, () => {
+    return runWriteTransaction(db, () => {
         if (getLeaseHolder(db) !== holderId || !isLeaseActive(db)) {
             return false;
         }
@@ -93,7 +76,7 @@ export function renewLease(db: Database, holderId: string): boolean {
 }
 
 export function releaseLease(db: Database, holderId: string): void {
-    runImmediate(db, () => {
+    runWriteTransaction(db, () => {
         if (getLeaseHolder(db) !== holderId) {
             return;
         }

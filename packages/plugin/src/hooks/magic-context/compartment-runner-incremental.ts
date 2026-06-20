@@ -47,6 +47,7 @@ import { insertUserMemoryCandidates } from "../../features/magic-context/user-me
 import { normalizeSDKResponse } from "../../shared";
 import { describeError } from "../../shared/error-message";
 import { sessionLog } from "../../shared/logger";
+import { runWriteTransaction } from "../../shared/write-transaction";
 import { updateCompactionMarkerAfterPublication } from "./compaction-marker-manager";
 import { buildCompartmentAgentPrompt } from "./compartment-prompt";
 import { queueDropsForCompartmentalizedMessages } from "./compartment-runner-drop-queue";
@@ -554,17 +555,9 @@ export async function runCompartmentAgent(deps: CompartmentRunnerDeps): Promise<
             rollbackDrainReservation();
             return;
         }
-        let published = false;
-        db.exec("BEGIN IMMEDIATE");
-        try {
+        const publishOutcome = runWriteTransaction(db, (): "published" | "lease-lost" => {
             if (!isCompartmentLeaseHeld(db, sessionId, holderId)) {
-                db.exec("ROLLBACK");
-                rollbackDrainReservation();
-                sessionLog(
-                    sessionId,
-                    "historian publish skipped: compartment lease no longer held",
-                );
-                return;
+                return "lease-lost";
             }
             appendCompartments(db, sessionId, persistedCompartments);
             // v2 faithful fact lifecycle: facts are NOT a REPLACE-the-whole-list
@@ -593,16 +586,12 @@ export async function runCompartmentAgent(deps: CompartmentRunnerDeps): Promise<
                     publishedAt: Date.now(),
                 });
             }
-            db.exec("COMMIT");
-            published = true;
-        } finally {
-            if (!published) {
-                try {
-                    db.exec("ROLLBACK");
-                } catch {
-                    // Transaction may already be closed by an early rollback.
-                }
-            }
+            return "published";
+        });
+        if (publishOutcome === "lease-lost") {
+            rollbackDrainReservation();
+            sessionLog(sessionId, "historian publish skipped: compartment lease no longer held");
+            return;
         }
         // Background publication normally preserves the injection cache until
         // a materializing pass can rebuild history and apply queued drops

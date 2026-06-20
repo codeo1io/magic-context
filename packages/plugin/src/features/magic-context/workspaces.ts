@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import type { Database } from "../../shared/sqlite";
+import { runWriteTransaction } from "../../shared/write-transaction";
 import { V2_MEMORY_CATEGORIES } from "./memory/constants";
 import { normalizeStoredProjectPath, storedPathBelongsToIdentity } from "./project-identity";
 
@@ -271,11 +272,6 @@ export function computeWorkspaceEpochFingerprint(
     return hash.digest("hex");
 }
 
-function isInTransaction(db: Database): boolean {
-    const candidate = db as unknown as { inTransaction?: unknown; isTransaction?: unknown };
-    return candidate.inTransaction === true || candidate.isTransaction === true;
-}
-
 function workspaceMembersForIdentity(db: Database, identity: string): string[] {
     if (!tableExists(db, "workspace_members")) return [identity];
     const rows = db
@@ -313,22 +309,7 @@ export function bumpEpochsForWorkspaceMembers(
     now = Date.now(),
 ): void {
     const run = () => bumpEpochRows(db, workspaceMembersForIdentity(db, identity), now);
-    if (isInTransaction(db)) {
-        run();
-        return;
-    }
-    db.exec("BEGIN IMMEDIATE");
-    try {
-        run();
-        db.exec("COMMIT");
-    } catch (error) {
-        try {
-            db.exec("ROLLBACK");
-        } catch {
-            // ignore rollback failures from an already-closed transaction
-        }
-        throw error;
-    }
+    runWriteTransaction(db, run);
 }
 
 export function bumpEpochsForWorkspaceMemberSet(
@@ -337,20 +318,5 @@ export function bumpEpochsForWorkspaceMemberSet(
     now = Date.now(),
 ): void {
     const run = () => bumpEpochRows(db, identities, now);
-    if (isInTransaction(db)) {
-        run();
-        return;
-    }
-    db.exec("BEGIN IMMEDIATE");
-    try {
-        run();
-        db.exec("COMMIT");
-    } catch (error) {
-        try {
-            db.exec("ROLLBACK");
-        } catch {
-            // ignore rollback failures from an already-closed transaction
-        }
-        throw error;
-    }
+    runWriteTransaction(db, run);
 }

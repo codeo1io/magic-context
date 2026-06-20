@@ -1,5 +1,6 @@
 import { getHarness } from "../../shared/harness";
 import type { Database, Statement as PreparedStatement } from "../../shared/sqlite";
+import { runWriteTransaction } from "../../shared/write-transaction";
 import { isCompartmentLeaseHeld } from "./compartment-lease";
 import { getIncrementDepthStatement } from "./compression-depth-storage";
 import { clearCachedM0M1 } from "./storage-meta-shared";
@@ -379,12 +380,8 @@ export function replaceAllCompartmentStateAndBumpDepth(
     depthEndOrdinal: number,
 ): boolean {
     const now = Date.now();
-    db.exec("BEGIN IMMEDIATE");
-    let finished = false;
-    try {
+    return runWriteTransaction(db, () => {
         if (!isCompartmentLeaseHeld(db, sessionId, holderId)) {
-            db.exec("ROLLBACK");
-            finished = true;
             return false;
         }
 
@@ -402,19 +399,8 @@ export function replaceAllCompartmentStateAndBumpDepth(
                 stmt.run(sessionId, ordinal, getHarness());
             }
         }
-
-        db.exec("COMMIT");
-        finished = true;
         return true;
-    } finally {
-        if (!finished) {
-            try {
-                db.exec("ROLLBACK");
-            } catch {
-                // Transaction may already be closed by SQLite after an error.
-            }
-        }
-    }
+    });
 }
 
 export interface CompartmentDateRanges {
@@ -587,19 +573,13 @@ export function promoteRecompStaging(
         })();
     }
 
-    db.exec("BEGIN IMMEDIATE");
-    let finished = false;
-    try {
+    return runWriteTransaction(db, () => {
         if (!isCompartmentLeaseHeld(db, sessionId, holderId)) {
-            db.exec("ROLLBACK");
-            finished = true;
             return null;
         }
 
         const staging = getRecompStaging(db, sessionId);
         if (!staging || staging.compartments.length === 0) {
-            db.exec("ROLLBACK");
-            finished = true;
             return null;
         }
         // Replace real tables
@@ -615,18 +595,8 @@ export function promoteRecompStaging(
 
         clearCachedM0M1(db, sessionId);
 
-        db.exec("COMMIT");
-        finished = true;
         return { compartments: staging.compartments, facts: staging.facts };
-    } finally {
-        if (!finished) {
-            try {
-                db.exec("ROLLBACK");
-            } catch {
-                // Transaction may already be closed by SQLite after an error.
-            }
-        }
-    }
+    });
 }
 
 /** Clear staging tables for a session (on cancel/abandon or after successful promote). */

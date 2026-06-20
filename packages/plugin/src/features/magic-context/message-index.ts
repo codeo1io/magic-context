@@ -7,6 +7,7 @@ import type { RawMessage } from "../../hooks/magic-context/read-session-raw";
 import { getHarness } from "../../shared/harness";
 import type { Database, Statement as PreparedStatement } from "../../shared/sqlite";
 import { removeSystemReminders } from "../../shared/system-directive";
+import { runWriteTransaction } from "../../shared/write-transaction";
 import { clearCompressionDepth } from "./compression-depth-storage";
 
 interface MessageHistoryIndexRow {
@@ -218,9 +219,7 @@ export function indexMessagesAfterOrdinal(
     // is reflected, so the second skips those ordinals and inserts nothing
     // duplicate. The bulk SELECT of existing message-ids is still avoided (it
     // held the writer lock too long on ~30k-row sessions).
-    db.exec("BEGIN IMMEDIATE");
-    let committed = false;
-    try {
+    return runWriteTransaction(db, () => {
         // Re-read under the lock: another process may have advanced the
         // watermark between the caller's out-of-transaction read and now.
         const effectiveWatermark = Math.max(
@@ -245,18 +244,8 @@ export function indexMessagesAfterOrdinal(
         // Never regress a higher watermark a concurrent writer may have set.
         const newWatermark = Math.max(effectiveWatermark, finalWatermark);
         getUpsertIndexStatement(db).run(sessionId, newWatermark, now, getHarness());
-        db.exec("COMMIT");
-        committed = true;
-    } finally {
-        if (!committed) {
-            try {
-                db.exec("ROLLBACK");
-            } catch {
-                // already rolled back / no active transaction
-            }
-        }
-    }
-    return inserted;
+        return inserted;
+    });
 }
 
 export function ensureMessagesIndexed(

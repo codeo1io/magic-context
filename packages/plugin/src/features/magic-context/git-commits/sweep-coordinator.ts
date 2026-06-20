@@ -1,4 +1,5 @@
 import type { Database } from "../../../shared/sqlite";
+import { runWriteTransaction } from "../../../shared/write-transaction";
 
 export const GIT_SWEEP_COOLDOWN_MS = 10 * 60 * 1000;
 // Commit indexing can include two embedding drains (the indexer drain plus the
@@ -59,25 +60,6 @@ export interface AcquireGitSweepLeaseOptions {
     ignoreCooldown?: boolean;
 }
 
-function runImmediate<T>(db: Database, body: () => T): T {
-    db.exec("BEGIN IMMEDIATE");
-    let committed = false;
-    try {
-        const result = body();
-        db.exec("COMMIT");
-        committed = true;
-        return result;
-    } finally {
-        if (!committed) {
-            try {
-                db.exec("ROLLBACK");
-            } catch {
-                // already rolled back / no active transaction
-            }
-        }
-    }
-}
-
 function rowToState(row: GitSweepCoordinatorRow): GitSweepCoordinatorState {
     return {
         projectPath: row.project_path,
@@ -110,7 +92,7 @@ export function acquireGitSweepLease(
     const cooldownMs = options.cooldownMs ?? GIT_SWEEP_COOLDOWN_MS;
     const leaseTtlMs = options.leaseTtlMs ?? GIT_SWEEP_LEASE_TTL_MS;
 
-    return runImmediate(db, () => {
+    return runWriteTransaction(db, () => {
         const now = Date.now();
         const row = getGitSweepCoordinatorState(db, projectPath);
         if (row?.leaseHolder && row.leaseExpiresAt !== null && row.leaseExpiresAt > now) {
@@ -173,7 +155,7 @@ export function renewGitSweepLease(
     holderId: string,
     leaseTtlMs = GIT_SWEEP_LEASE_TTL_MS,
 ): boolean {
-    return runImmediate(db, () => {
+    return runWriteTransaction(db, () => {
         const now = Date.now();
         const leaseExpiresAt = now + leaseTtlMs;
         const result = db
@@ -194,7 +176,7 @@ export function markGitSweepSuccessAndRelease(
     projectPath: string,
     holderId: string,
 ): boolean {
-    return runImmediate(db, () => {
+    return runWriteTransaction(db, () => {
         const now = Date.now();
         const result = db
             .prepare(
@@ -212,7 +194,7 @@ export function markGitSweepSuccessAndRelease(
 }
 
 export function releaseGitSweepLease(db: Database, projectPath: string, holderId: string): void {
-    runImmediate(db, () => {
+    runWriteTransaction(db, () => {
         db.prepare(
             `UPDATE git_sweep_coordinator
              SET lease_holder = NULL,

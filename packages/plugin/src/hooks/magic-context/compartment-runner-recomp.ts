@@ -25,6 +25,7 @@ import { getErrorMessage } from "../../shared/error-message";
 import { getHarness } from "../../shared/harness";
 import { sessionLog } from "../../shared/logger";
 import type { Database } from "../../shared/sqlite";
+import { runWriteTransaction } from "../../shared/write-transaction";
 import { updateCompactionMarkerAfterPublication } from "./compaction-marker-manager";
 import { buildCompartmentAgentPrompt } from "./compartment-prompt";
 import { queueDropsForCompartmentalizedMessages } from "./compartment-runner-drop-queue";
@@ -90,19 +91,13 @@ export function promoteRecompStagingWithM0Mutation(
     facts: Array<{ category: string; content: string }>;
 } | null {
     const now = Date.now();
-    db.exec("BEGIN IMMEDIATE");
-    let finished = false;
-    try {
+    return runWriteTransaction(db, () => {
         if (!isCompartmentLeaseHeld(db, sessionId, holderId)) {
-            db.exec("ROLLBACK");
-            finished = true;
             return null;
         }
 
         const staging = getRecompStaging(db, sessionId);
         if (!staging || staging.compartments.length === 0) {
-            db.exec("ROLLBACK");
-            finished = true;
             return null;
         }
 
@@ -124,18 +119,8 @@ export function promoteRecompStagingWithM0Mutation(
         db.prepare("DELETE FROM recomp_facts WHERE session_id = ?").run(sessionId);
         clearCachedM0M1(db, sessionId);
 
-        db.exec("COMMIT");
-        finished = true;
         return { compartments: staging.compartments, facts: staging.facts };
-    } finally {
-        if (!finished) {
-            try {
-                db.exec("ROLLBACK");
-            } catch {
-                // Transaction may already be closed by SQLite after an error.
-            }
-        }
-    }
+    });
 }
 
 export async function executeContextRecompInternal(deps: CompartmentRunnerDeps): Promise<string> {

@@ -10,6 +10,7 @@ import { getHarness } from "../../../shared/harness";
 import { shouldKeepSubagents } from "../../../shared/keep-subagents";
 import { log } from "../../../shared/logger";
 import type { Database } from "../../../shared/sqlite";
+import { runWriteTransaction } from "../../../shared/write-transaction";
 import { peekLeaseHolderAndExpiry, renewLease } from "../dreamer/lease";
 import { recordChildInvocation } from "../subagent-token-capture";
 import { isAftAvailable } from "./aft-availability";
@@ -423,9 +424,7 @@ export function commitKeyFiles(args: {
     );
     const generatedAt = Date.now();
     const bump = args.bumpVersion ?? bumpKeyFilesVersion;
-    args.db.exec("BEGIN IMMEDIATE");
-    let committed = false;
-    try {
+    return runWriteTransaction(args.db, () => {
         if (!peekLeaseHolderAndExpiry(args.db, args.leaseHolderId)) {
             log(`key-files commit aborted: lease lost (holder ${args.leaseHolderId})`);
             return null;
@@ -440,21 +439,11 @@ export function commitKeyFiles(args: {
             args.configHash,
         );
         const version = bump(args.db, projectPath);
-        args.db.exec("COMMIT");
-        committed = true;
         log(
             `key-files committed: ${resolved.length} files, version=${version}, ${resolved.filter((r) => r.staleReason).length} pre-stale`,
         );
         return version;
-    } finally {
-        if (!committed) {
-            try {
-                args.db.exec("ROLLBACK");
-            } catch {
-                // no active transaction
-            }
-        }
-    }
+    });
 }
 
 async function runKeyFilesLlm(args: {
