@@ -83,6 +83,11 @@ export const OMITTED_BY_DESIGN: Readonly<Record<string, string>> = {
   "sidekick.system_prompt": "free-form prompt override; raw JSONC",
   "system_prompt_injection.skip_signatures":
     "free-form substring array; raw JSONC (no array widget in the form yet)",
+  // External memory backend (Hindsight tee + recall). USER config only and
+  // operator-configured (endpoint/api_key, bank routing, recall tuning); no
+  // form widgets exist. Whole subtree is raw-JSONC by design.
+  "memory.external":
+    "external long-term memory backend (provider/endpoint/banks/retain_sources/tags + recall sub-block); USER config only, operator-configured, raw JSONC",
 };
 
 /**
