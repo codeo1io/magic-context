@@ -63,6 +63,10 @@ function seedMemory(h: TestHarness, projectIdentity: string, content: string): v
     const dbPath = join(h.opencode.env.dataDir, "cortexkit", "magic-context", "context.db");
     const db = new Database(dbPath);
     try {
+        // Match the plugin's own busy_timeout so a concurrent writer (historian
+        // checkpoint, dreamer run) inside the live opencode process can't make
+        // this seed INSERT throw SQLITE_BUSY. Same pattern as cache-invariants.
+        db.query("PRAGMA busy_timeout = 5000").run();
         const now = Date.now();
         // Use the production hash helper so this matches the value the plugin
         // stores when it promotes a memory. Plugin uses Bun.CryptoHasher("md5"),
