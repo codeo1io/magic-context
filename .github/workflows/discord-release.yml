@@ -41,7 +41,7 @@ permissions:
 jobs:
   announce:
     name: Post to Discord
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     # Don't block the release pipeline on Discord delivery — if the webhook
     # is down or misconfigured, the npm/GitHub artifacts are already
     # published and the announcement can be retried via workflow_dispatch.

@@ -1,3 +1,9 @@
+# NOTE (self-hosted policy): this repo allows ONLY self-hosted runners.
+# The macOS and Windows Tauri legs were removed: those builds require their
+# native OS SDKs (Apple codesign/import, WiX/NSIS toolchains) that the
+# Linux-only self-hosted pool cannot provide. The two Linux legs (x64 +
+# ARM64) are kept and cross-compile as before. Restore those legs only when
+# macOS/Windows self-hosted runners exist.
 name: Dashboard Release
 
 on:
@@ -19,34 +25,14 @@ jobs:
       fail-fast: false
       matrix:
         settings:
-          - host: macos-latest
-            target: aarch64-apple-darwin
-            label: macOS ARM64
-            arch: arm64
-          - host: macos-latest
-            target: x86_64-apple-darwin
-            label: macOS Intel
-            arch: x64
-          - host: ubuntu-22.04
+          - host: self-hosted
             target: x86_64-unknown-linux-gnu
             label: Linux x64
             arch: x64
-          - host: ubuntu-22.04-arm
+          - host: self-hosted
             target: aarch64-unknown-linux-gnu
             label: Linux ARM64
             arch: arm64
-          - host: windows-latest
-            target: x86_64-pc-windows-msvc
-            label: Windows x64
-            arch: x64
-          - host: windows-11-arm
-            target: aarch64-pc-windows-msvc
-            label: Windows ARM64
-            arch: arm64
-            # WiX has no ARM64 support — NSIS is the only Windows ARM installer
-            # Tauri can produce. Without this override the default bundle set
-            # ("all") fails the leg at the .msi step.
-            bundles: nsis
 
     runs-on: ${{ matrix.settings.host }}
     steps:
@@ -62,9 +48,10 @@ jobs:
           targets: ${{ matrix.settings.target }}
 
       - name: Install Linux dependencies
-        if: contains(matrix.settings.host, 'ubuntu')
+        if: runner.os == 'Linux'
         run: |
-          sudo apt-get update
+          # Pre-installed on the self-hosted runner host; apt here is idempotent
+          # confirmation rather than a network fetch.
           sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
 
       - name: Install dependencies
@@ -145,7 +132,7 @@ jobs:
   deploy-updater:
     name: Deploy updater manifest
     needs: build
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     steps:
       - uses: actions/checkout@v5
 

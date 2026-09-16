@@ -49,7 +49,7 @@ env:
 jobs:
   test:
     name: Test (plugin)
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     steps:
       - uses: actions/checkout@v5
 
@@ -74,7 +74,7 @@ jobs:
 
   test-pi:
     name: Test (pi-plugin)
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     steps:
       - uses: actions/checkout@v5
 
@@ -99,7 +99,7 @@ jobs:
 
   test-cli:
     name: Test (cli)
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     steps:
       - uses: actions/checkout@v5
 
@@ -124,7 +124,7 @@ jobs:
 
   e2e-opencode:
     name: E2E (OpenCode, Docker)
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     needs: [test, test-cli]
     timeout-minutes: 25
     steps:
@@ -157,7 +157,7 @@ jobs:
 
   e2e-pi:
     name: E2E (Pi, Docker)
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     needs: [test-pi, test-cli]
     timeout-minutes: 25
     steps:
@@ -194,7 +194,7 @@ jobs:
 
   e2e-host-opencode:
     name: E2E (OpenCode, host behavior)
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     # Gated on Docker e2e: no point exercising the deep behavior suite if
     # the simpler install+smoke path is broken.
     needs: [e2e-opencode]
@@ -244,7 +244,7 @@ jobs:
 
   e2e-host-pi:
     name: E2E (Pi, host behavior)
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     needs: [e2e-pi]
     timeout-minutes: 40
     steps:
@@ -290,7 +290,7 @@ jobs:
 
   publish-npm:
     name: Publish plugin to npm
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     # Publishes are gated on the full e2e suite (OpenCode + Pi) so a tag
     # push can never produce a published npm package whose runtime fails
     # the install + first-turn smoke test.
@@ -332,7 +332,7 @@ jobs:
 
   publish-npm-pi:
     name: Publish pi-plugin to npm
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     needs: [test, test-pi, test-cli, e2e-opencode, e2e-pi, e2e-host-opencode, e2e-host-pi]
     steps:
       - uses: actions/checkout@v5
@@ -366,7 +366,7 @@ jobs:
 
   publish-npm-cli:
     name: Publish unified CLI to npm
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     needs: [test, test-pi, test-cli, e2e-opencode, e2e-pi, e2e-host-opencode, e2e-host-pi]
     steps:
       - uses: actions/checkout@v5
@@ -400,7 +400,7 @@ jobs:
 
   github-release:
     name: Create GitHub Release
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     # Wait for ALL three npm publishes to succeed before tagging the
     # GitHub release. Previously this depended only on test jobs, so a
     # publish timeout or registry failure could leave a published release
@@ -445,7 +445,7 @@ jobs:
   # retried via `gh workflow run discord-release.yml ...`.
   discord-announce:
     name: Announce on Discord
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     needs: github-release
     if: success()
     continue-on-error: true
