@@ -30,7 +30,7 @@ env:
 jobs:
   check-plugin:
     name: Check (plugin)
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     steps:
       - uses: actions/checkout@v5
 
@@ -55,7 +55,7 @@ jobs:
 
   check-pi-plugin:
     name: Check (pi-plugin)
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     steps:
       - uses: actions/checkout@v5
 
@@ -80,7 +80,7 @@ jobs:
 
   check-dashboard:
     name: Check (dashboard)
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     steps:
       - uses: actions/checkout@v5
 
@@ -110,7 +110,7 @@ jobs:
 
   e2e-opencode:
     name: E2E (OpenCode, Docker)
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     needs: [check-plugin]
     timeout-minutes: 25
     steps:
@@ -143,7 +143,7 @@ jobs:
 
   e2e-pi:
     name: E2E (Pi, Docker)
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     needs: [check-pi-plugin]
     timeout-minutes: 25
     steps:
@@ -180,11 +180,15 @@ jobs:
 
   e2e-host-opencode:
     name: E2E (OpenCode, host behavior)
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     # Gated on Docker e2e: no point exercising the deep behavior suite if
     # the simpler install+smoke path is broken.
     needs: [e2e-opencode]
-    timeout-minutes: 40
+    # 90m: on the shared self-hosted box the SDK's per-call latency is
+    # amplified ~300x under co-tenant load (measured: session.create 100ms
+    # quiet vs 31s loaded). Test-level timeouts are 300s; the job budget
+    # must cover the full suite at that pace.
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v5
 
@@ -243,7 +247,7 @@ jobs:
 
   e2e-host-pi:
     name: E2E (Pi, host behavior)
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     needs: [e2e-pi]
     timeout-minutes: 40
     steps:

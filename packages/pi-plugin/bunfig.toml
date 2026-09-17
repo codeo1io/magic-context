@@ -9,3 +9,9 @@ minimumReleaseAge = 259200
 # (2026-06-01 incident). Structural guard; do not remove.
 [test]
 preload = ["./test-preload.ts"]
+
+# NOTE: per-test timeout is raised via `--timeout 120000` in package.json's
+# "test" script, not here — Bun (as of 1.4.x) ignores a [test] timeout key in
+# bunfig.toml; only the CLI flag is honored. The bump is for the shared
+# self-hosted CI runner, where load spikes regularly push DB-heavy tests
+# (migrations, memory-migration chains, dreamer leases) past Bun's 5s default.

@@ -185,8 +185,7 @@ describe("Pi doctor", () => {
         expect(output).toContain("PASS SQLite integrity_check: ok");
         expect(output).toContain("Summary: PASS");
         expect(output).toContain("FAIL 0");
-    });
-
+    }, 30_000);
     it("repairs missing package entry and missing user config in --force mode", async () => {
         const root = makeTempRoot();
         const cwd = makeTempRoot("mc-pi-doctor-cwd-");
@@ -210,8 +209,7 @@ describe("Pi doctor", () => {
         expect(output).toContain("Added npm:@cortexkit/pi-magic-context");
         expect(output).toContain("Wrote default Magic Context config");
         expect(output).toContain("Repair attempted; 2 item(s) changed");
-    });
-
+    }, 30_000);
     it("recognizes object-form Magic Context package and preserves object entries during repair", async () => {
         const root = makeTempRoot();
         const cwd = makeTempRoot("mc-pi-doctor-cwd-");
@@ -251,8 +249,7 @@ describe("Pi doctor", () => {
         const output = prompts.messages.join("\n");
         expect(output).toContain("PASS npm:@cortexkit/pi-magic-context is registered");
         expect(output).not.toContain("Added npm:@cortexkit/pi-magic-context");
-    });
-
+    }, 30_000);
     it("generates a sanitized markdown report in --issue mode without calling gh create", async () => {
         const root = makeTempRoot();
         const cwd = makeTempRoot("mc-pi-doctor-cwd-");

@@ -161,11 +161,13 @@ done
 check "aimock /v1/models responds" \
     "curl -fsS http://127.0.0.1:4010/v1/models > /dev/null"
 
-# Run opencode for one turn. Cap at 60s so a hung mock doesn't hang CI.
+# Run opencode for one turn. Cap at 180s so a hung mock doesn't hang CI —
+# but generous enough for a containerized cold start on a loaded shared runner
+# (60s produced exit 137 with zero log lines under load ~100+).
 echo ""
 set +e
 OPENAI_API_KEY=sk-mock-e2e-test \
-    timeout --signal=KILL 60 opencode run \
+    timeout --signal=KILL 180 opencode run \
         --model "mock/mock-model" \
         "Say hello once and then stop." \
         > /tmp/opencode.log 2>&1

@@ -675,7 +675,16 @@ describe("magic-context hook", () => {
                 },
             });
 
-            await new Promise((resolve) => setTimeout(resolve, 0));
+            // The dream check runs on a background task; a single tick is a
+            // race under load. Poll briefly for the expected calls instead.
+            const deadline = Date.now() + 30_000;
+            while (
+                Date.now() < deadline &&
+                (promptMocks.createSession.mock.calls.length < 1 ||
+                    promptMocks.deleteSession.mock.calls.length < 1)
+            ) {
+                await new Promise((resolve) => setTimeout(resolve, 50));
+            }
 
             expect(promptMocks.createSession).toHaveBeenCalledTimes(1);
             expect(promptMocks.deleteSession).toHaveBeenCalledTimes(1);

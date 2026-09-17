@@ -200,6 +200,7 @@ describe("migrateOpenCodeSessionToPi", () => {
 
         const result = migrateOpenCodeSessionToPi({
             db,
+            cortexkitDb: null,
             sessionId,
             piSessionsRoot: root,
             now: new Date("2026-04-30T11:46:47.422Z"),
@@ -259,6 +260,7 @@ describe("migrateOpenCodeSessionToPi", () => {
         const { sessionId } = insertSyntheticSession(db);
         const result = migrateOpenCodeSessionToPi({
             db,
+            cortexkitDb: null,
             sessionId,
             piSessionsRoot: tempDir(),
             maxMessages: 2,
@@ -283,6 +285,7 @@ describe("migrateOpenCodeSessionToPi", () => {
         const writes: string[] = [];
         const result = migrateOpenCodeSessionToPi({
             db,
+            cortexkitDb: null,
             sessionId,
             piSessionsRoot: root,
             dryRun: true,

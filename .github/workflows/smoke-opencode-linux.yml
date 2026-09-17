@@ -34,7 +34,7 @@ env:
 jobs:
   smoke:
     name: opencode HTTP probe (${{ matrix.hostname }})
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     timeout-minutes: 8
     strategy:
       # Run both hostname choices even if one fails — we want full diagnostic
