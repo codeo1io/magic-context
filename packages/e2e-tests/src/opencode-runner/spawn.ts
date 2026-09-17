@@ -26,6 +26,7 @@ const PLUGIN_SRC_ENTRY = join(REPO_ROOT, "packages/plugin/src/index.ts");
 const PLUGIN_ENTRY = existsSync(PLUGIN_DIST_ENTRY) ? PLUGIN_DIST_ENTRY : PLUGIN_SRC_ENTRY;
 
 export interface IsolatedEnv {
+    homeDir: string;
     configDir: string;
     dataDir: string;
     cacheDir: string;
@@ -71,14 +72,15 @@ async function pickFreePort(): Promise<number> {
 function createIsolatedEnv(): IsolatedEnv {
     const unique = `opencode-e2e-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const base = join(tmpdir(), unique);
+    const homeDir = join(base, "home");
     const configDir = join(base, "config");
     const dataDir = join(base, "data");
     const cacheDir = join(base, "cache");
     const workdir = join(base, "work");
-    for (const d of [configDir, dataDir, cacheDir, workdir]) {
+    for (const d of [homeDir, configDir, dataDir, cacheDir, workdir]) {
         mkdirSync(d, { recursive: true });
     }
-    return { configDir, dataDir, cacheDir, workdir };
+    return { homeDir, configDir, dataDir, cacheDir, workdir };
 }
 
 /**
@@ -239,6 +241,7 @@ export async function spawnOpencode(opts: SpawnOptions): Promise<SpawnedOpencode
         childEnv[key] = value;
     }
     childEnv.OPENCODE_CONFIG_DIR = env.configDir;
+    childEnv.HOME = env.homeDir;
     childEnv.XDG_CONFIG_HOME = env.configDir;
     childEnv.XDG_DATA_HOME = env.dataDir;
     childEnv.XDG_CACHE_HOME = env.cacheDir;

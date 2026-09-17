@@ -184,7 +184,11 @@ jobs:
     # Gated on Docker e2e: no point exercising the deep behavior suite if
     # the simpler install+smoke path is broken.
     needs: [e2e-opencode]
-    timeout-minutes: 40
+    # 90m: on the shared self-hosted box the SDK's per-call latency is
+    # amplified ~300x under co-tenant load (measured: session.create 100ms
+    # quiet vs 31s loaded). Test-level timeouts are 300s; the job budget
+    # must cover the full suite at that pace.
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v5
 
