@@ -81,8 +81,18 @@ jobs:
       - name: Plugin unit tests (fast subset)
         run: bun run --cwd packages/plugin test src/config src/agents
 
-      - name: Pi-plugin unit tests
-        run: bun run --cwd packages/pi-plugin test
+      - name: Pi-plugin unit tests (fast subset)
+        # Full pi-plugin suite includes I/O-heavy files (pi-memory-migration,
+        # ctx-commands, tools/*) that take 36s quiet but 250s+ when the shared
+        # box is loaded (mkdtemp/rmSync/SQLite churn, near-zero CPU). Those run
+        # in the full lane; the PR lane keeps every other unit file.
+        run: |
+          cd packages/pi-plugin
+          files=$(find src -name '*.test.ts' \
+            | grep -vE 'pi-memory-migration\.test\.ts|commands/ctx-commands\.test\.ts|^src/tools/' \
+            | tr '\n' ' ')
+          echo "Pi-plugin fast subset: $files"
+          bun test --timeout 120000 $files
 
       - name: CLI unit tests
         run: bun run --cwd packages/cli test
