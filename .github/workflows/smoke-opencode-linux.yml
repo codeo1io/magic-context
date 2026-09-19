@@ -25,8 +25,10 @@ name: Smoke (opencode bring-up on Linux)
 on:
   push:
     branches: [master, main]
-  pull_request:
   workflow_dispatch:
+  # NOTE: no pull_request trigger — this diagnostic used to add two ~5min
+  # jobs to every PR. It runs on master/main pushes and on demand; the PR
+  # fast lane lives in ci.yml.
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
