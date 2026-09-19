@@ -1,16 +1,42 @@
 name: CI
 
 on:
+  pull_request:
   push:
     branches: [master, main]
-  pull_request:
+  schedule:
+    # Nightly full pipeline: complete unit test suite, Docker e2e, and host
+    # behavior e2e for both harnesses.
+    - cron: '37 2 * * *'
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
-# Pipeline shape on every push to master and on every PR:
+# Two lanes:
 #
-#   check-plugin, check-pi-plugin                          (unit tests + lint + typecheck, parallel)
+# PR FAST LANE (every pull_request) — one consolidated job, target <2 min.
+# The repo has a single self-hosted runner, so separate jobs would queue
+# behind each other and multiply the wall time; everything runs inside one
+# job instead:
+#
+#   pr-fast-gate:
+#     1. biome lint on all workspace packages (plugin, pi-plugin, cli)
+#     2. plugin fast unit subset (src/config + src/agents — schema guards,
+#        permission model, project-security, removed-config-keys drift)
+#     3. pi-plugin full unit tests (fast, ~40s measured)
+#     4. cli unit tests
+#     5. dashboard typecheck + lint + test + frontend build
+#        (config-parity gate: schema/manifest drift fails here)
+#     6. plugin + pi-plugin + cli builds
+#
+# Typecheck on all packages (~2-4 min on this box) and the full plugin unit
+# suite (~570s) move OFF the PR path — they run in the full lane. Lint and
+# the builds stay: they are the cheap, high-signal packaging gates.
+#
+# FULL LANE (push to master/main + nightly) — everything that used to gate
+# every PR, with the same gating structure as before:
+#
+#   check-plugin, check-pi-plugin                          (full unit + lint + typecheck, parallel)
 #                  ↓
 #   e2e-opencode, e2e-pi                                   (Docker install + smoke, parallel — gated by unit)
 #                  ↓
@@ -23,14 +49,77 @@ env:
 #     historian publish behavior, tag-owner collision, synthetic todowrite, cross-harness memory,
 #     etc. Spawns real `opencode serve` / Pi subprocesses against an embedded mock provider.
 #     Catches cache-stability + correctness regressions that the smoke layer cannot see.
-#
-# Docker e2e was previously in a separate workflow (e2e-docker.yml). Folding it here means
-# every PR and master push exercises the full unit → Docker → host gauntlet.
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
+  pr-fast-gate:
+    name: PR fast gate
+    runs-on: self-hosted
+    if: github.event_name == 'pull_request'
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install
+
+      # Lint every workspace package first — cheapest high-signal gate.
+      - name: Lint (all packages)
+        run: bun run lint
+
+      # Fast unit subset: src/config + src/agents carry the config-schema
+      # and permission-model guards (incl. project-security and
+      # removed-config-keys drift checks) — the regressions a PR can most
+      # plausibly introduce. Full unit suite runs in the full lane.
+      - name: Plugin unit tests (fast subset)
+        run: bun run --cwd packages/plugin test src/config src/agents
+
+      - name: Pi-plugin unit tests (fast subset)
+        # Full pi-plugin suite includes I/O-heavy files (pi-memory-migration,
+        # ctx-commands, tools/*) that take 36s quiet but 250s+ when the shared
+        # box is loaded (mkdtemp/rmSync/SQLite churn, near-zero CPU). Those run
+        # in the full lane; the PR lane keeps every other unit file.
+        run: |
+          cd packages/pi-plugin
+          files=$(find src -name '*.test.ts' \
+            | grep -vE 'pi-memory-migration\.test\.ts|commands/ctx-commands\.test\.ts|^src/tools/' \
+            | tr '\n' ' ')
+          echo "Pi-plugin fast subset: $files"
+          bun test --timeout 120000 $files
+
+      - name: CLI unit tests
+        run: bun run --cwd packages/cli test
+
+      # Dashboard: config-parity test fails the PR if the plugin config
+      # schema drifts from the dashboard ConfigEditor coverage manifest.
+      - name: Dashboard typecheck
+        run: bun run --cwd packages/dashboard typecheck
+
+      - name: Dashboard lint
+        run: bun run --cwd packages/dashboard lint
+
+      - name: Dashboard tests (config parity)
+        run: bun run --cwd packages/dashboard test
+
+      - name: Dashboard build (frontend)
+        run: bun run --cwd packages/dashboard build
+
+      # Packaging gate: all three shippable packages must build.
+      - name: Build (plugin + pi-plugin + cli)
+        run: bun run build
+
   check-plugin:
     name: Check (plugin)
     runs-on: self-hosted
+    if: github.event_name != 'pull_request'
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v5
 
@@ -50,12 +139,17 @@ jobs:
       - name: Build
         run: bun run build
 
+      # Full workspace unit suite (plugin + pi-plugin + cli) — the plugin
+      # suite alone measured ~570s, which is why it lives here and not on
+      # the PR fast lane.
       - name: Test
         run: bun run test
 
   check-pi-plugin:
     name: Check (pi-plugin)
     runs-on: self-hosted
+    if: github.event_name != 'pull_request'
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v5
 
@@ -78,40 +172,11 @@ jobs:
       - name: Test
         run: bun run --cwd packages/pi-plugin test
 
-  check-dashboard:
-    name: Check (dashboard)
-    runs-on: self-hosted
-    steps:
-      - uses: actions/checkout@v5
-
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: latest
-
-      - name: Install dependencies
-        run: bun install
-
-      # Frontend-only checks (no Rust/Tauri needed). The key gate is the test
-      # step, which runs config-parity.test.ts — it fails the build if the
-      # plugin config schema gains/renames/removes a field the dashboard's
-      # ConfigEditor coverage manifest doesn't account for, so the form can't
-      # silently drift out of sync with the schema again.
-      - name: TypeScript typecheck
-        run: bun run --cwd packages/dashboard typecheck
-
-      - name: Lint
-        run: bun run --cwd packages/dashboard lint
-
-      - name: Test
-        run: bun run --cwd packages/dashboard test
-
-      - name: Build (frontend)
-        run: bun run --cwd packages/dashboard build
-
   e2e-opencode:
     name: E2E (OpenCode, Docker)
     runs-on: self-hosted
     needs: [check-plugin]
+    if: github.event_name != 'pull_request'
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v5
@@ -145,6 +210,7 @@ jobs:
     name: E2E (Pi, Docker)
     runs-on: self-hosted
     needs: [check-pi-plugin]
+    if: github.event_name != 'pull_request'
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v5
@@ -184,6 +250,7 @@ jobs:
     # Gated on Docker e2e: no point exercising the deep behavior suite if
     # the simpler install+smoke path is broken.
     needs: [e2e-opencode]
+    if: github.event_name != 'pull_request'
     # 90m: on the shared self-hosted box the SDK's per-call latency is
     # amplified ~300x under co-tenant load (measured: session.create 100ms
     # quiet vs 31s loaded). Test-level timeouts are 300s; the job budget
@@ -249,6 +316,7 @@ jobs:
     name: E2E (Pi, host behavior)
     runs-on: self-hosted
     needs: [e2e-pi]
+    if: github.event_name != 'pull_request'
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@v5
