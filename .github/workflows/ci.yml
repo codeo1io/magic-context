@@ -57,7 +57,7 @@ concurrency:
 jobs:
   pr-fast-gate:
     name: PR fast gate
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     if: github.event_name == 'pull_request'
     timeout-minutes: 10
     steps:
@@ -117,7 +117,7 @@ jobs:
 
   check-plugin:
     name: Check (plugin)
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     if: github.event_name != 'pull_request'
     timeout-minutes: 25
     steps:
@@ -147,7 +147,7 @@ jobs:
 
   check-pi-plugin:
     name: Check (pi-plugin)
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     if: github.event_name != 'pull_request'
     timeout-minutes: 25
     steps:
@@ -174,7 +174,7 @@ jobs:
 
   e2e-opencode:
     name: E2E (OpenCode, Docker)
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     needs: [check-plugin]
     if: github.event_name != 'pull_request'
     timeout-minutes: 25
@@ -208,7 +208,7 @@ jobs:
 
   e2e-pi:
     name: E2E (Pi, Docker)
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     needs: [check-pi-plugin]
     if: github.event_name != 'pull_request'
     timeout-minutes: 25
@@ -246,7 +246,7 @@ jobs:
 
   e2e-host-opencode:
     name: E2E (OpenCode, host behavior)
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     # Gated on Docker e2e: no point exercising the deep behavior suite if
     # the simpler install+smoke path is broken.
     needs: [e2e-opencode]
@@ -314,7 +314,7 @@ jobs:
 
   e2e-host-pi:
     name: E2E (Pi, host behavior)
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     needs: [e2e-pi]
     if: github.event_name != 'pull_request'
     timeout-minutes: 40
